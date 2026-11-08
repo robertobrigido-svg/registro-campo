@@ -55,3 +55,9 @@ audio{width:100%;margin-top:12px}
 #toast{position:fixed;left:16px;right:16px;bottom:calc(16px + env(safe-area-inset-bottom));background:var(--indigo);color:#fff;
   padding:12px 16px;border-radius:10px;text-align:center;z-index:10}
 [hidden]{display:none !important}
+
+.tag{font-size:12px;font-weight:bold;border-radius:10px;padding:1px 8px;margin-left:6px}
+.tag.ok{background:#E3F1E8;color:#2F7D4F;border:1px solid #2F7D4F}
+.tag.pend{background:#FBF0D9;color:#8A5A00;border:1px dashed #C98A12}
+label.marcar{display:flex;gap:8px;align-items:center;color:var(--texto);font-size:15px}
+label.marcar input{width:auto}

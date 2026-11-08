@@ -301,6 +301,7 @@ $('btn-salvar').addEventListener('click', async () => {
   try {
     await salvarReg(rascunho);
     toast('Registro salvo no celular.');
+    if (driveCfg().auto) setTimeout(() => enviarPendentes(true), 400);
     rascunho = null; mostrar('tela-inicio'); await atualizarLista();
   } catch (e) { toast('Não consegui salvar. Verifique o espaço do celular.'); }
 });
@@ -309,7 +310,10 @@ $('btn-salvar').addEventListener('click', async () => {
 async function atualizarLista() {
   const todos = await lerTodos(); const hoje = diaISO(Date.now());
   const doDia = todos.filter(r => diaISO(r.ts) === hoje);
-  $('kpi-hoje').textContent = doDia.length; $('kpi-total').textContent = todos.length;
+  const pendentes = todos.filter(pendente).length;
+  $('kpi-hoje').textContent = doDia.length; $('kpi-total').textContent = pendentes;
+  $('btn-enviar').textContent = pendentes ? `Enviar para o Drive (${pendentes})` : 'Tudo enviado para o Drive';
+  $('btn-enviar').disabled = enviando || !pendentes;
   const ses = await sessaoAberta();
   if (ses) {
     const n = todos.filter(r => r.sessaoId === ses.id).length;
@@ -322,7 +326,7 @@ async function atualizarLista() {
     const li = document.createElement('li'); li.className = 'item';
     const img = document.createElement('img'); img.src = URL.createObjectURL(r.foto); img.alt = '';
     const d = document.createElement('div');
-    d.innerHTML = `<b>${horaBR(r.ts)}</b><small>${esc(localTxt(r))}</small><p>${esc(r.transcricao || (r.audio ? 'Áudio sem texto' : 'Sem comentário'))}</p>`;
+    d.innerHTML = `<b>${horaBR(r.ts)}</b> <span class="tag ${pendente(r) ? 'pend' : 'ok'}">${pendente(r) ? 'a enviar' : 'enviado'}</span><small>${esc(localTxt(r))}</small><p>${esc(r.transcricao || (r.audio ? 'Áudio sem texto' : 'Sem comentário'))}</p>`;
     li.append(img, d); li.addEventListener('click', () => abrirDetalhe(r.id)); ul.append(li);
   }
 }
@@ -457,12 +461,17 @@ const blobParaURI = b => new Promise(ok => { const f = new FileReader(); f.onloa
 const extFoto = r => (/png/.test(r.fotoTipo) ? 'png' : /heic|heif/.test(r.fotoTipo) ? 'heic' : 'jpg');
 const extAudio = r => (/mp4|aac|m4a/.test(r.audioTipo) ? 'm4a' : /ogg/.test(r.audioTipo) ? 'ogg' : 'webm');
 const seq = i => String(i + 1).padStart(3, '0');
+// nome estável dos arquivos no Drive e nos pacotes: data, hora e começo do SHA-256 (não muda quando entram outros registros)
+function nomesDe(r) {
+  const stem = `${diaISO(r.ts).replace(/-/g, '')}_${horaBR(r.ts).replace(/:/g, '')}_${(r.sha256 || '').slice(0, 8)}`;
+  return { foto: `fotos/${stem}.${extFoto(r)}`, audio: r.audio ? `audios/${stem}.${extAudio(r)}` : null };
+}
 
 function csv(regs, nomeSessao = () => '') {
   const cab = ['Nº', 'Data', 'Hora', 'Latitude', 'Longitude', 'Precisão (m)', 'Origem do local', 'Origem da hora', 'Sessão', 'Comentário', 'Foto', 'Áudio', 'SHA-256 da foto'];
   const cel = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const linhas = regs.map((r, i) => [i + 1, dataBR(r.ts), horaBR(r.ts), r.lat == null ? '' : num(r.lat, 6), r.lon == null ? '' : num(r.lon, 6),
-    r.precisao ? Math.round(r.precisao) : '', r.fonteLocal || '', r.fonteHora || '', nomeSessao(r), r.transcricao, `fotos/${seq(i)}.${extFoto(r)}`, r.audio ? `audios/${seq(i)}.${extAudio(r)}` : '', r.sha256 || ''].map(cel).join(';'));
+    r.precisao ? Math.round(r.precisao) : '', r.fonteLocal || '', r.fonteHora || '', nomeSessao(r), r.transcricao, nomesDe(r).foto, nomesDe(r).audio || '', r.sha256 || ''].map(cel).join(';'));
   return '﻿' + [cab.map(cel).join(';'), ...linhas].join('\r\n');
 }
 
@@ -489,7 +498,7 @@ async function relatorioHTML(regs, meta, logoURI, sessoes) {
     }
     itens.push(`<section class="reg"><div class="num">Foto ${i + 1} de ${regs.length}</div><img src="${img}" alt="Foto ${i + 1}">
 <p class="com"><b>Comentário:</b> ${r.transcricao ? esc(r.transcricao) : 'Sem comentário'}</p>
-<p class="hash">Arquivo original: fotos/${seq(i)}.${extFoto(r)} · SHA-256: ${h || 'não calculado'}</p></section>`);
+<p class="hash">Arquivo original: ${nomesDe(r).foto} · SHA-256: ${h || 'não calculado'}</p></section>`);
   }
   const hoje = dataBR(Date.now());
   return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -519,13 +528,19 @@ ${itens.join('\n')}
 </body></html>`;
 }
 
-let ultimoPacote = null, ultimoRelatorioURL = null, ultimosSoltos = [], ultimosArqs = [], ultimoPacoteNome = '';
+let ultimoPacote = null, ultimoRelatorioURL = null;
+
+// ---------- estado de envio de cada registro ----------
+// r.enviado = { arquivos: foto e áudio já estão no Drive, v: versão do comentário e da sessão que o Drive conhece }
+const versaoReg = r => `${r.transcricao || ''}|${r.sessaoId || ''}`;
+const pendente = r => !(r.enviado && r.enviado.arquivos && r.enviado.v === versaoReg(r));
+async function atualizarReg(id, fn) { const a = await lerReg(id); if (!a) return; fn(a); await salvarReg(a); } // relê o registro, para não apagar uma edição feita durante o envio
 
 // ---------- envio para o Google Drive (script do Google na conta do usuário; ver drive/INSTALAR-DRIVE.md) ----------
-const driveCfg = () => ({ url: (localStorage.getItem('driveUrl') || '').trim(), senha: localStorage.getItem('driveSenha') || '' });
-function guardarDrive() { localStorage.setItem('driveUrl', $('drive-url').value.trim()); localStorage.setItem('driveSenha', $('drive-senha').value); }
-function carregarDrive() { const c = driveCfg(); $('drive-url').value = c.url; $('drive-senha').value = c.senha; }
-['drive-url', 'drive-senha'].forEach(id => $(id).addEventListener('change', guardarDrive));
+const driveCfg = () => ({ url: (localStorage.getItem('driveUrl') || '').trim(), senha: localStorage.getItem('driveSenha') || '', auto: localStorage.getItem('driveAuto') === '1' });
+function guardarDrive() { localStorage.setItem('driveUrl', $('drive-url').value.trim()); localStorage.setItem('driveSenha', $('drive-senha').value); localStorage.setItem('driveAuto', $('drive-auto').checked ? '1' : '0'); }
+function carregarDrive() { const c = driveCfg(); $('drive-url').value = c.url; $('drive-senha').value = c.senha; $('drive-auto').checked = c.auto; }
+['drive-url', 'drive-senha', 'drive-auto'].forEach(id => $(id).addEventListener('change', guardarDrive));
 async function chamarDrive(corpo) {
   const c = driveCfg();
   if (!c.url || !c.senha) throw new Error('Preencha o endereço e a senha do Drive.');
@@ -543,35 +558,83 @@ $('btn-drive-testar').addEventListener('click', async () => {
 });
 const blobB64 = b => new Promise(ok => { const f = new FileReader(); f.onload = () => ok(f.result.split(',')[1]); f.readAsDataURL(b); });
 const tipoDe = n => /\.jpe?g$/i.test(n) ? 'image/jpeg' : /\.png$/i.test(n) ? 'image/png' : /\.heic$/i.test(n) ? 'image/heic' : /\.m4a$/i.test(n) ? 'audio/mp4' : /\.webm$/i.test(n) ? 'audio/webm' : /\.ogg$/i.test(n) ? 'audio/ogg' : /\.csv$/i.test(n) ? 'text/csv' : /\.json$/i.test(n) ? 'application/json' : /\.html$/i.test(n) ? 'text/html' : 'application/octet-stream';
-$('btn-drive').addEventListener('click', async () => {
-  if (!ultimosArqs.length) return;
-  if (!navigator.onLine) { toast('Sem internet. Tente de novo quando houver sinal.', 6000); return; }
-  if (!driveCfg().url || !driveCfg().senha) { $('cfg-drive').open = true; toast('Preencha o endereço e a senha do Drive e toque em Testar conexão.', 7000); return; }
-  const btn = $('btn-drive'); btn.disabled = true; const falhas = []; let motivo = '';
-  for (let i = 0; i < ultimosArqs.length; i++) {
-    const a = ultimosArqs[i]; btn.textContent = `Enviando ${i + 1} de ${ultimosArqs.length}...`;
-    const blob = a.dados instanceof Blob ? a.dados : new Blob([a.dados]);
-    let ok = false;
-    for (let t = 0; t < 3 && !ok; t++) {
-      try {
-        const j = await chamarDrive({ pacote: ultimoPacoteNome, caminho: a.nome, tipo: tipoDe(a.nome), dados: await blobB64(blob) });
-        if (j.tamanho === blob.size) ok = true; else throw new Error('O Drive guardou o arquivo com tamanho diferente.');
-      } catch (e) { motivo = e.message; await new Promise(r => setTimeout(r, 1500)); }
+const esperar = ms => new Promise(r => setTimeout(r, ms));
+
+// monta tabela, JSON e relatório do dia (e, se pedido, as fotos e os áudios), com nomes estáveis
+async function montarArquivos(regs, meta, comMidia) {
+  const sessoes = await lerSessoes();
+  const nomeSessao = r => (sessoes.find(s => s.id === r.sessaoId) || {}).nome || '';
+  const logoURI = await blobParaURI(await (await fetch('logo.png')).blob());
+  const html = await relatorioHTML(regs, meta, logoURI, sessoes);
+  const enc = new TextEncoder(), arqs = [];
+  if (comMidia) regs.forEach(r => { const n = nomesDe(r); arqs.push({ nome: n.foto, dados: r.foto }); if (r.audio) arqs.push({ nome: n.audio, dados: r.audio }); });
+  arqs.push({ nome: 'registros.csv', dados: enc.encode(csv(regs, nomeSessao)) });
+  arqs.push({ nome: 'registros.json', dados: enc.encode(JSON.stringify(regs.map((r, i) => ({ n: i + 1, dataHora: new Date(r.ts).toISOString(), latitude: r.lat == null ? null : +r.lat.toFixed(6), longitude: r.lon == null ? null : +r.lon.toFixed(6), precisaoMetros: r.precisao ?? null, origemLocal: r.fonteLocal, origemHora: r.fonteHora, sessao: nomeSessao(r), comentario: r.transcricao, comentarioOriginal: r.transcricaoOriginal ?? r.transcricao, foto: nomesDe(r).foto, sha256: r.sha256 || null, audio: nomesDe(r).audio })), null, 2)) });
+  arqs.push({ nome: 'relatorio-fotografico.html', dados: enc.encode(html) });
+  return { arqs, html };
+}
+
+// manda só o que falta: foto e áudio de registro novo (uma vez) e a tabela, o JSON e o relatório do dia (regravados na mesma pasta)
+let enviando = false;
+async function enviarPendentes(auto) {
+  if (enviando) return;
+  const cfg = driveCfg();
+  if (!cfg.url || !cfg.senha) { if (!auto) { carregarDrive(); mostrar('tela-exportar'); toast('Preencha o endereço e a senha do Drive e toque em Testar conexão.', 7000); } return; }
+  if (!navigator.onLine) { if (!auto) toast('Sem internet. Tente de novo quando houver sinal.', 6000); return; }
+  const todos = await lerTodos(), pend = todos.filter(pendente);
+  if (!pend.length) { if (!auto) toast('Não há nada pendente. Tudo já está no Drive.'); return; }
+  enviando = true;
+  const btn = $('btn-enviar'); btn.disabled = true;
+  const meta = { obra: localStorage.getItem('obra') || '', resp: localStorage.getItem('resp') || '' };
+  const falhas = []; let motivo = '', mandados = 0;
+  try {
+    for (const dia of [...new Set(pend.map(r => diaISO(r.ts)))]) {
+      const regs = todos.filter(r => diaISO(r.ts) === dia);
+      for (const r of regs) if (!r.sha256) { r.sha256 = await sha256(r.foto); if (r.sha256) await atualizarReg(r.id, a => { a.sha256 = r.sha256; }); } // registro antigo, sem código
+      const novos = regs.filter(r => !(r.enviado && r.enviado.arquivos));
+      const total = novos.reduce((n, r) => n + (r.audio ? 2 : 1), 0) + 3;
+      let feitos = 0;
+      const mandar = async (nome, dados, substituir) => {
+        const blob = dados instanceof Blob ? dados : new Blob([dados]);
+        for (let t = 0; t < 3; t++) {
+          try {
+            const j = await chamarDrive({ pacote: dia, caminho: nome, tipo: tipoDe(nome), dados: await blobB64(blob), substituir: !!substituir });
+            if (j.tamanho === blob.size) { mandados++; feitos++; btn.textContent = `Enviando ${feitos} de ${total}...`; return true; }
+            throw new Error('O Drive guardou o arquivo com tamanho diferente.');
+          } catch (e) { motivo = e.message; await esperar(1500); }
+        }
+        falhas.push(nome); return false;
+      };
+      btn.textContent = `Enviando 0 de ${total}...`;
+      for (const r of novos) {
+        const n = nomesDe(r);
+        let ok = await mandar(n.foto, r.foto, false);
+        if (ok && r.audio) ok = await mandar(n.audio, r.audio, false);
+        if (ok) await atualizarReg(r.id, a => { a.enviado = { arquivos: true, v: a.enviado ? a.enviado.v : '' }; });
+      }
+      const { arqs } = await montarArquivos(regs, meta, false);
+      let manifestoOk = true;
+      for (const a of arqs) if (!(await mandar(a.nome, a.dados, true))) manifestoOk = false;
+      if (manifestoOk) for (const r of regs) await atualizarReg(r.id, a => { if (a.enviado && a.enviado.arquivos) a.enviado.v = versaoReg(r); }); // versão que o Drive recebeu; edição feita durante o envio continua pendente
     }
-    if (!ok) falhas.push(a.nome);
-  }
-  btn.disabled = false; btn.textContent = 'Enviar para o Drive';
-  if (falhas.length) toast(`Enviei ${ultimosArqs.length - falhas.length} de ${ultimosArqs.length}. Falharam: ${falhas.slice(0, 3).join(', ')}${falhas.length > 3 ? '...' : ''}. ${motivo}`, 12000);
-  else toast(`Tudo enviado para o Drive (${ultimosArqs.length} arquivos), na pasta ${ultimoPacoteNome}.`, 9000);
+  } catch (e) { motivo = e.message; }
+  enviando = false; btn.disabled = false;
+  await atualizarLista();
+  if (falhas.length) toast(`Enviei ${mandados} arquivo(s). Falharam: ${falhas.slice(0, 3).join(', ')}${falhas.length > 3 ? '...' : ''}. ${motivo} Toque em enviar de novo.`, 12000);
+  else if (!auto || mandados) toast(`Enviado para o Drive (${mandados} arquivo(s)).`, 7000);
+}
+$('btn-enviar').addEventListener('click', () => enviarPendentes(false));
+addEventListener('online', () => { if (driveCfg().auto) enviarPendentes(true); });
+
+$('btn-limpar').addEventListener('click', async () => {
+  const prontos = (await lerTodos()).filter(r => r.enviado && !pendente(r));
+  if (!prontos.length) { toast('Nenhum registro já enviado para apagar.'); return; }
+  if (!confirm(`Apagar do celular ${prontos.length} registro(s) já enviados ao Drive? Eles continuam no Drive. Aqui não dá para desfazer.`)) return;
+  for (const r of prontos) await apagarReg(r.id);
+  toast(`${prontos.length} registro(s) apagados do celular.`); atualizarLista();
 });
-$('btn-soltos').addEventListener('click', async () => {
-  if (!ultimosSoltos.length) return;
-  if (!navigator.canShare || !navigator.canShare({ files: ultimosSoltos })) {
-    toast('Este navegador também não aceita enviar as fotos soltas. Use "Baixar o pacote".', 8000); return;
-  }
-  try { await navigator.share({ files: ultimosSoltos }); }
-  catch (e) { if (e.name !== 'AbortError') toast('O compartilhamento falhou (' + e.name + '). Use "Baixar o pacote".', 8000); }
-});
+
+// ---------- mais opções, plano B sem Drive: pacote do dia em ZIP e relatório preliminar ----------
 $('btn-exportar').addEventListener('click', async () => {
   $('data-exp').value = diaISO(Date.now());
   $('obra').value = localStorage.getItem('obra') || ''; $('resp').value = localStorage.getItem('resp') || '';
@@ -580,58 +643,32 @@ $('btn-exportar').addEventListener('click', async () => {
 async function regsDoDia() { const d = $('data-exp').value; return (await lerTodos()).filter(r => diaISO(r.ts) === d); }
 async function resumo() { const n = (await regsDoDia()).length; $('resumo-exp').textContent = n ? `${n} registro(s) nesta data.` : 'Nenhum registro nesta data.'; }
 $('data-exp').addEventListener('change', resumo);
-$('btn-voltar').addEventListener('click', () => mostrar('tela-inicio'));
+['obra', 'resp'].forEach(id => $(id).addEventListener('change', () => localStorage.setItem(id, $(id).value.trim())));
+$('btn-voltar').addEventListener('click', () => { guardarDrive(); mostrar('tela-inicio'); });
 $('btn-gerar').addEventListener('click', async () => {
   const regs = await regsDoDia(); if (!regs.length) { toast('Não há registros nesta data.'); return; }
-  for (const r of regs) if (!r.sha256) { r.sha256 = await sha256(r.foto); if (r.sha256) await salvarReg(r); } // registros antigos, feitos antes do código existir
+  for (const r of regs) if (!r.sha256) { r.sha256 = await sha256(r.foto); if (r.sha256) await atualizarReg(r.id, a => { a.sha256 = r.sha256; }); }
   const meta = { obra: $('obra').value.trim(), resp: $('resp').value.trim() };
   localStorage.setItem('obra', meta.obra); localStorage.setItem('resp', meta.resp);
   $('btn-gerar').disabled = true; $('btn-gerar').textContent = 'Gerando...';
   try {
-    const logoURI = await blobParaURI(await (await fetch('logo.png')).blob());
-    const sessoes = await lerSessoes();
-    const nomeSessao = r => (sessoes.find(s => s.id === r.sessaoId) || {}).nome || '';
-    const html = await relatorioHTML(regs, meta, logoURI, sessoes);
-    const arqs = [];
-    regs.forEach((r, i) => { arqs.push({ nome: `fotos/${seq(i)}.${extFoto(r)}`, dados: r.foto }); if (r.audio) arqs.push({ nome: `audios/${seq(i)}.${extAudio(r)}`, dados: r.audio }); });
-    const enc = new TextEncoder();
-    arqs.push({ nome: 'registros.csv', dados: enc.encode(csv(regs, nomeSessao)) });
-    arqs.push({ nome: 'registros.json', dados: enc.encode(JSON.stringify(regs.map((r, i) => ({ n: i + 1, dataHora: new Date(r.ts).toISOString(), latitude: r.lat == null ? null : +r.lat.toFixed(6), longitude: r.lon == null ? null : +r.lon.toFixed(6), precisaoMetros: r.precisao ?? null, origemLocal: r.fonteLocal, origemHora: r.fonteHora, sessao: nomeSessao(r), comentario: r.transcricao, comentarioOriginal: r.transcricaoOriginal ?? r.transcricao, foto: `fotos/${seq(i)}.${extFoto(r)}`, sha256: r.sha256 || null, audio: r.audio ? `audios/${seq(i)}.${extAudio(r)}` : null })), null, 2)) });
-    arqs.push({ nome: 'relatorio-fotografico.html', dados: enc.encode(html) });
-    const agoraNome = new Date(), carimbo = `${$('data-exp').value}_${pad(agoraNome.getHours())}${pad(agoraNome.getMinutes())}${pad(agoraNome.getSeconds())}`; // hora de geração no nome: cada exportação gera um arquivo novo
-    ultimosArqs = arqs; ultimoPacoteNome = `registro-campo-${carimbo}`;
-    const nome = `registro-campo-${carimbo}.zip`;
+    const { arqs, html } = await montarArquivos(regs, meta, true);
+    const ag = new Date(), nome = `registro-campo-${$('data-exp').value}_${pad(ag.getHours())}${pad(ag.getMinutes())}${pad(ag.getSeconds())}.zip`; // a hora no nome: cada geração é um arquivo novo
     ultimoPacote = new File([await montarZip(arqs)], nome, { type: 'application/zip' });
-    ultimosSoltos = [
-      ...regs.map((r, i) => new File([r.foto], `foto-${seq(i)}.${extFoto(r)}`, { type: r.fotoTipo || 'image/jpeg' })),
-      new File([csv(regs, nomeSessao)], `registros-${carimbo}.csv`, { type: 'text/csv' })
-    ];
     if (ultimoRelatorioURL) URL.revokeObjectURL(ultimoRelatorioURL);
     ultimoRelatorioURL = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
     $('msg-resultado').textContent = `Pacote pronto: ${nome} (${(ultimoPacote.size / 1048576).toFixed(1).replace('.', ',')} MB), com ${regs.length} registro(s), fotos originais, áudios, tabela em ordem de horário e relatório.`;
     $('resultado').hidden = false;
-    toast('Pacote pronto. Toque em "Enviar o pacote" ou em "Baixar o pacote".', 6000);
+    toast('Pacote pronto. Toque em "Baixar o pacote".', 6000);
     $('resultado').scrollIntoView({ behavior: 'smooth', block: 'center' });
   } catch (e) { toast('Falha ao gerar o pacote: ' + e.message, 6000); }
   $('btn-gerar').disabled = false; $('btn-gerar').textContent = 'Gerar arquivos';
 });
-$('btn-compartilhar').addEventListener('click', async () => {
-  if (!ultimoPacote) return;
-  if (!navigator.share) { toast('Este navegador não abre o menu de compartilhar. Use "Baixar o pacote".', 7000); return; }
-  if (!navigator.canShare || !navigator.canShare({ files: [ultimoPacote] })) {
-    toast('Este navegador não deixa compartilhar arquivo ZIP direto. Use "Baixar o pacote" e envie pelo app Arquivos.', 8000); return;
-  }
-  try { await navigator.share({ files: [ultimoPacote], title: ultimoPacote.name }); }
-  catch (e) { if (e.name !== 'AbortError') toast('O compartilhamento falhou (' + e.name + '). Use "Baixar o pacote".', 8000); }
-});
-$('btn-baixar').addEventListener('click', () => {
-  if (!ultimoPacote) return;
-  const a = document.createElement('a'); a.href = URL.createObjectURL(ultimoPacote); a.download = ultimoPacote.name; document.body.append(a); a.click(); a.remove();
-});
+$('btn-baixar').addEventListener('click', () => { if (ultimoPacote) baixarArquivo(ultimoPacote); });
 $('btn-relatorio').addEventListener('click', () => { if (ultimoRelatorioURL) window.open(ultimoRelatorioURL, '_blank'); });
 
 // ---------- início ----------
-const VERSAO_APP = 'v12';
+const VERSAO_APP = 'v13';
 function redeEstado() { $('estado-rede').textContent = (navigator.onLine ? 'Funciona sem internet' : 'Sem internet · tudo continua funcionando') + ' · ' + VERSAO_APP; }
 addEventListener('online', redeEstado); addEventListener('offline', redeEstado);
 redeEstado();
