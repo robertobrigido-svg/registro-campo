@@ -139,6 +139,11 @@ $('entrada-foto').addEventListener('change', async ev => {
   else if (ultimaPos) { r.ts = ultimaPos.ts; r.fonteHora = 'gps do aparelho'; }
   else { r.ts = agora; r.fonteHora = 'relógio do aparelho'; }
   rascunho = r;
+  pararGPS(); // já lemos a posição; deixar ligado gasta bateria
+  // a foto é salva já, antes do comentário: se o celular fechar o app durante a câmera ou o áudio, a foto não se perde
+  r.sha256 = await sha256(arq);
+  try { await salvarReg(r); } catch (e) { toast('Não consegui guardar a foto. Verifique o espaço do celular.', 6000); }
+  atualizarLista();
   $('previa').src = URL.createObjectURL(arq);
   $('info-local').textContent = `${dataBR(r.ts)} ${horaBR(r.ts)} · ${localTxt(r)}`;
   $('texto').value = ''; $('tocar').hidden = true; $('tocar').removeAttribute('src');
@@ -221,7 +226,8 @@ $('btn-ditar').addEventListener('click', () => {
   let base = $('texto').value.trim(); base = base ? base + ' ' : '';
   ditado = new SR(); ditado.lang = 'pt-BR'; ditado.continuous = false; ditado.interimResults = true;
   ditado.onresult = e => {
-    let t = ''; for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript;
+    // só o último resultado: em alguns celulares cada resultado repete o anterior e o texto saía duplicado
+    const t = e.results[e.results.length - 1][0].transcript;
     $('texto').value = (base + t).trim();
   };
   ditado.onerror = e => {
@@ -237,15 +243,17 @@ $('btn-ditar').addEventListener('click', () => {
   } catch (e) { $('status-audio').textContent = 'Não consegui iniciar o ditado.'; }
 });
 $('btn-gravar').addEventListener('click', () => (gravando ? pararGravar() : comecarGravar()));
-$('btn-descartar').addEventListener('click', () => {
+$('btn-descartar').addEventListener('click', async () => {
   if (gravando) pararGravar();
-  if (confirm('Descartar esta foto e o comentário?')) { rascunho = null; mostrar('tela-inicio'); }
+  if (confirm('Descartar esta foto e o comentário? Não dá para desfazer.')) {
+    if (rascunho) await apagarReg(rascunho.id);
+    rascunho = null; mostrar('tela-inicio'); atualizarLista();
+  }
 });
 $('btn-salvar').addEventListener('click', async () => {
   if (gravando) pararGravar();
   await new Promise(r => setTimeout(r, 250)); // deixa o gravador fechar o áudio
   rascunho.transcricao = $('texto').value.trim();
-  rascunho.sha256 = await sha256(rascunho.foto);
   try {
     await salvarReg(rascunho);
     toast('Registro salvo no celular.');
@@ -273,7 +281,12 @@ async function abrirDetalhe(id) {
   $('det-foto').src = URL.createObjectURL(r.foto);
   $('det-meta').textContent = `${dataBR(r.ts)} ${horaBR(r.ts)} · ${localTxt(r)}`;
   const a = $('det-audio'); if (r.audio) { a.src = URL.createObjectURL(r.audio); a.hidden = false; } else { a.hidden = true; a.removeAttribute('src'); }
-  $('det-texto').textContent = r.transcricao || '';
+  $('det-texto').value = r.transcricao || '';
+  $('det-salvar').onclick = async () => {
+    const atual = await lerReg(id); if (!atual) return;
+    atual.transcricao = $('det-texto').value.trim();
+    await salvarReg(atual); toast('Comentário atualizado.'); atualizarLista();
+  };
   $('det-excluir').onclick = async () => { if (confirm('Excluir este registro? Não dá para desfazer.')) { await apagarReg(id); mostrar('tela-inicio'); atualizarLista(); } };
   mostrar('tela-detalhe');
 }
@@ -289,11 +302,12 @@ async function montarZip(arquivos) { // arquivos: [{nome, dados: Blob|Uint8Array
   for (const a of arquivos) {
     const u8 = a.dados instanceof Blob ? new Uint8Array(await a.dados.arrayBuffer()) : a.dados;
     const nome = enc.encode(a.nome), crc = crc32(u8);
+    const corpo = a.dados instanceof Blob ? a.dados : u8; // guarda o arquivo, não a cópia em memória
     const h = new DataView(new ArrayBuffer(30));
     h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true); h.setUint16(8, 0, true);
     h.setUint16(10, dosT, true); h.setUint16(12, dosD, true); h.setUint32(14, crc, true);
     h.setUint32(18, u8.length, true); h.setUint32(22, u8.length, true); h.setUint16(26, nome.length, true); h.setUint16(28, 0, true);
-    partes.push(h.buffer, nome, u8);
+    partes.push(h.buffer, nome, corpo);
     const c = new DataView(new ArrayBuffer(46));
     c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true);
     c.setUint16(12, dosT, true); c.setUint16(14, dosD, true); c.setUint32(16, crc, true);
@@ -356,7 +370,7 @@ async function relatorioHTML(regs, meta, logoURI) {
   }
   const hoje = dataBR(Date.now());
   return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Relatório fotográfico ${dia}</title><style>
+<title>Relatório fotográfico ${dia.replace(/\//g, '-')}</title><style>
 @page{size:A4;margin:12mm}*{box-sizing:border-box}
 body{font-family:Arial,Helvetica,sans-serif;color:#1E1B2B;margin:0;font-size:11pt;background:#fff}
 .faixa{background:#2A1C47;color:#fff;padding:14px 18px;display:flex;justify-content:space-between;align-items:center;border-bottom:3px solid #BFBFBF}
@@ -401,6 +415,7 @@ $('data-exp').addEventListener('change', resumo);
 $('btn-voltar').addEventListener('click', () => mostrar('tela-inicio'));
 $('btn-gerar').addEventListener('click', async () => {
   const regs = await regsDoDia(); if (!regs.length) { toast('Não há registros nesta data.'); return; }
+  for (const r of regs) if (!r.sha256) { r.sha256 = await sha256(r.foto); if (r.sha256) await salvarReg(r); } // registros antigos, feitos antes do código existir
   const meta = { obra: $('obra').value.trim(), resp: $('resp').value.trim() };
   localStorage.setItem('obra', meta.obra); localStorage.setItem('resp', meta.resp);
   $('btn-gerar').disabled = true; $('btn-gerar').textContent = 'Gerando...';
@@ -444,9 +459,18 @@ $('btn-baixar').addEventListener('click', () => {
 $('btn-relatorio').addEventListener('click', () => { if (ultimoRelatorioURL) window.open(ultimoRelatorioURL, '_blank'); });
 
 // ---------- início ----------
-function redeEstado() { $('estado-rede').textContent = navigator.onLine ? 'Funciona sem internet' : 'Sem internet · tudo continua funcionando'; }
+const VERSAO_APP = 'v7';
+function redeEstado() { $('estado-rede').textContent = (navigator.onLine ? 'Funciona sem internet' : 'Sem internet · tudo continua funcionando') + ' · ' + VERSAO_APP; }
 addEventListener('online', redeEstado); addEventListener('offline', redeEstado);
 redeEstado();
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+if ('serviceWorker' in navigator) {
+  const tinhaSW = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+  // versão nova assumiu: recarrega sozinho só se o usuário estiver na tela inicial, para não perder um registro em andamento
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!tinhaSW) return;
+    if (!$('tela-inicio').hidden && !gravando && !ditando) location.reload(); else toast('Nova versão disponível. Ela entra quando você voltar à tela inicial e reabrir.', 6000);
+  });
+}
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
 atualizarLista();
