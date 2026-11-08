@@ -78,8 +78,18 @@
       <button id="btn-voltar" class="secundario" type="button">Voltar</button>
       <button id="btn-gerar" class="principal" type="button">Gerar arquivos</button>
     </div>
+    <details id="cfg-drive" style="margin-top:16px">
+      <summary style="font-weight:bold;color:var(--indigo);cursor:pointer">Envio para o Drive</summary>
+      <label for="drive-url">Endereço do script (termina em /exec)</label>
+      <input id="drive-url" type="text" autocapitalize="off" autocomplete="off" spellcheck="false">
+      <label for="drive-senha">Senha do envio</label>
+      <input id="drive-senha" type="password" autocomplete="off">
+      <button id="btn-drive-testar" class="secundario" type="button" style="width:100%;margin-top:12px">Testar conexão</button>
+      <p id="drive-status" class="meta"></p>
+    </details>
     <div id="resultado" hidden>
       <p class="meta" id="msg-resultado"></p>
+      <button id="btn-drive" class="principal" type="button">Enviar para o Drive</button>
       <button id="btn-compartilhar" class="principal" type="button">Enviar o pacote (WhatsApp, e-mail...)</button>
       <button id="btn-soltos" class="secundario" type="button">Enviar fotos e tabela (sem ZIP)</button>
       <button id="btn-baixar" class="secundario" type="button">Baixar o pacote</button>

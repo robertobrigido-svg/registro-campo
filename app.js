@@ -472,7 +472,51 @@ ${itens.join('\n')}
 </body></html>`;
 }
 
-let ultimoPacote = null, ultimoRelatorioURL = null, ultimosSoltos = [];
+let ultimoPacote = null, ultimoRelatorioURL = null, ultimosSoltos = [], ultimosArqs = [], ultimoPacoteNome = '';
+
+// ---------- envio para o Google Drive (script do Google na conta do usuário; ver drive/INSTALAR-DRIVE.md) ----------
+const driveCfg = () => ({ url: (localStorage.getItem('driveUrl') || '').trim(), senha: localStorage.getItem('driveSenha') || '' });
+function guardarDrive() { localStorage.setItem('driveUrl', $('drive-url').value.trim()); localStorage.setItem('driveSenha', $('drive-senha').value); }
+function carregarDrive() { const c = driveCfg(); $('drive-url').value = c.url; $('drive-senha').value = c.senha; }
+['drive-url', 'drive-senha'].forEach(id => $(id).addEventListener('change', guardarDrive));
+async function chamarDrive(corpo) {
+  const c = driveCfg();
+  if (!c.url || !c.senha) throw new Error('Preencha o endereço e a senha do Drive.');
+  let r;
+  try { r = await fetch(c.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ senha: c.senha, ...corpo }) }); }
+  catch (e) { throw new Error('Não consegui falar com o Drive. Confira a internet, o endereço e se o script foi publicado.'); }
+  let j; try { j = await r.json(); } catch (e) { throw new Error('Resposta inesperada do Drive. Confira se o endereço termina em /exec.'); }
+  if (!j.ok) throw new Error(j.erro || 'Falha no Drive.');
+  return j;
+}
+$('btn-drive-testar').addEventListener('click', async () => {
+  guardarDrive(); $('drive-status').textContent = 'Testando...';
+  try { $('drive-status').textContent = (await chamarDrive({ ping: true })).mensagem; }
+  catch (e) { $('drive-status').textContent = 'Não conectou: ' + e.message; }
+});
+const blobB64 = b => new Promise(ok => { const f = new FileReader(); f.onload = () => ok(f.result.split(',')[1]); f.readAsDataURL(b); });
+const tipoDe = n => /\.jpe?g$/i.test(n) ? 'image/jpeg' : /\.png$/i.test(n) ? 'image/png' : /\.heic$/i.test(n) ? 'image/heic' : /\.m4a$/i.test(n) ? 'audio/mp4' : /\.webm$/i.test(n) ? 'audio/webm' : /\.ogg$/i.test(n) ? 'audio/ogg' : /\.csv$/i.test(n) ? 'text/csv' : /\.json$/i.test(n) ? 'application/json' : /\.html$/i.test(n) ? 'text/html' : 'application/octet-stream';
+$('btn-drive').addEventListener('click', async () => {
+  if (!ultimosArqs.length) return;
+  if (!navigator.onLine) { toast('Sem internet. Tente de novo quando houver sinal.', 6000); return; }
+  if (!driveCfg().url || !driveCfg().senha) { $('cfg-drive').open = true; toast('Preencha o endereço e a senha do Drive e toque em Testar conexão.', 7000); return; }
+  const btn = $('btn-drive'); btn.disabled = true; const falhas = []; let motivo = '';
+  for (let i = 0; i < ultimosArqs.length; i++) {
+    const a = ultimosArqs[i]; btn.textContent = `Enviando ${i + 1} de ${ultimosArqs.length}...`;
+    const blob = a.dados instanceof Blob ? a.dados : new Blob([a.dados]);
+    let ok = false;
+    for (let t = 0; t < 3 && !ok; t++) {
+      try {
+        const j = await chamarDrive({ pacote: ultimoPacoteNome, caminho: a.nome, tipo: tipoDe(a.nome), dados: await blobB64(blob) });
+        if (j.tamanho === blob.size) ok = true; else throw new Error('O Drive guardou o arquivo com tamanho diferente.');
+      } catch (e) { motivo = e.message; await new Promise(r => setTimeout(r, 1500)); }
+    }
+    if (!ok) falhas.push(a.nome);
+  }
+  btn.disabled = false; btn.textContent = 'Enviar para o Drive';
+  if (falhas.length) toast(`Enviei ${ultimosArqs.length - falhas.length} de ${ultimosArqs.length}. Falharam: ${falhas.slice(0, 3).join(', ')}${falhas.length > 3 ? '...' : ''}. ${motivo}`, 12000);
+  else toast(`Tudo enviado para o Drive (${ultimosArqs.length} arquivos), na pasta ${ultimoPacoteNome}.`, 9000);
+});
 $('btn-soltos').addEventListener('click', async () => {
   if (!ultimosSoltos.length) return;
   if (!navigator.canShare || !navigator.canShare({ files: ultimosSoltos })) {
@@ -484,7 +528,7 @@ $('btn-soltos').addEventListener('click', async () => {
 $('btn-exportar').addEventListener('click', async () => {
   $('data-exp').value = diaISO(Date.now());
   $('obra').value = localStorage.getItem('obra') || ''; $('resp').value = localStorage.getItem('resp') || '';
-  $('resultado').hidden = true; await resumo(); mostrar('tela-exportar');
+  carregarDrive(); $('resultado').hidden = true; await resumo(); mostrar('tela-exportar');
 });
 async function regsDoDia() { const d = $('data-exp').value; return (await lerTodos()).filter(r => diaISO(r.ts) === d); }
 async function resumo() { const n = (await regsDoDia()).length; $('resumo-exp').textContent = n ? `${n} registro(s) nesta data.` : 'Nenhum registro nesta data.'; }
@@ -508,6 +552,7 @@ $('btn-gerar').addEventListener('click', async () => {
     arqs.push({ nome: 'registros.json', dados: enc.encode(JSON.stringify(regs.map((r, i) => ({ n: i + 1, dataHora: new Date(r.ts).toISOString(), latitude: r.lat == null ? null : +r.lat.toFixed(6), longitude: r.lon == null ? null : +r.lon.toFixed(6), precisaoMetros: r.precisao ?? null, origemLocal: r.fonteLocal, origemHora: r.fonteHora, sessao: nomeSessao(r), comentario: r.transcricao, comentarioOriginal: r.transcricaoOriginal ?? r.transcricao, foto: `fotos/${seq(i)}.${extFoto(r)}`, sha256: r.sha256 || null, audio: r.audio ? `audios/${seq(i)}.${extAudio(r)}` : null })), null, 2)) });
     arqs.push({ nome: 'relatorio-fotografico.html', dados: enc.encode(html) });
     const agoraNome = new Date(), carimbo = `${$('data-exp').value}_${pad(agoraNome.getHours())}${pad(agoraNome.getMinutes())}${pad(agoraNome.getSeconds())}`; // hora de geração no nome: cada exportação gera um arquivo novo
+    ultimosArqs = arqs; ultimoPacoteNome = `registro-campo-${carimbo}`;
     const nome = `registro-campo-${carimbo}.zip`;
     ultimoPacote = new File([await montarZip(arqs)], nome, { type: 'application/zip' });
     ultimosSoltos = [
@@ -539,7 +584,7 @@ $('btn-baixar').addEventListener('click', () => {
 $('btn-relatorio').addEventListener('click', () => { if (ultimoRelatorioURL) window.open(ultimoRelatorioURL, '_blank'); });
 
 // ---------- início ----------
-const VERSAO_APP = 'v9';
+const VERSAO_APP = 'v10';
 function redeEstado() { $('estado-rede').textContent = (navigator.onLine ? 'Funciona sem internet' : 'Sem internet · tudo continua funcionando') + ' · ' + VERSAO_APP; }
 addEventListener('online', redeEstado); addEventListener('offline', redeEstado);
 redeEstado();
