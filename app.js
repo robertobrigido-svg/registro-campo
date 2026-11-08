@@ -28,16 +28,25 @@ let _db;
 function abrirBD() {
   if (_db) return Promise.resolve(_db);
   return new Promise((ok, erro) => {
-    const rq = indexedDB.open(BD, 1);
-    rq.onupgradeneeded = () => rq.result.createObjectStore(LOJA, { keyPath: 'id' }).createIndex('ts', 'ts');
-    rq.onsuccess = () => { _db = rq.result; ok(_db); };
+    const rq = indexedDB.open(BD, 2);
+    rq.onupgradeneeded = () => {
+      const db = rq.result;
+      if (!db.objectStoreNames.contains(LOJA)) db.createObjectStore(LOJA, { keyPath: 'id' }).createIndex('ts', 'ts');
+      if (!db.objectStoreNames.contains('sessoes')) db.createObjectStore('sessoes', { keyPath: 'id' });
+    };
+    rq.onsuccess = () => {
+      _db = rq.result;
+      _db.onversionchange = () => { _db.close(); _db = null; }; // outra aba ou versão nova pediu para atualizar o banco
+      ok(_db);
+    };
+    rq.onblocked = () => toast('Feche as outras abas do app para atualizar os dados.', 8000);
     rq.onerror = () => erro(rq.error);
   });
 }
-async function tx(modo, fn) {
+async function tx(modo, fn, loja = LOJA) {
   const db = await abrirBD();
   return new Promise((ok, erro) => {
-    const t = db.transaction(LOJA, modo); const r = fn(t.objectStore(LOJA));
+    const t = db.transaction(loja, modo); const r = fn(t.objectStore(loja));
     t.oncomplete = () => ok(r && r.result); t.onerror = () => erro(t.error); t.onabort = () => erro(t.error);
   });
 }
@@ -45,6 +54,28 @@ const salvarReg = r => tx('readwrite', s => s.put(r));
 const apagarReg = id => tx('readwrite', s => s.delete(id));
 const lerTodos = async () => (await tx('readonly', s => s.getAll())).sort((a, b) => a.ts - b.ts);
 const lerReg = id => tx('readonly', s => s.get(id));
+const salvarSessao = s => tx('readwrite', st => st.put(s), 'sessoes');
+const lerSessoes = async () => (await tx('readonly', st => st.getAll(), 'sessoes')).sort((a, b) => a.inicio - b.inicio);
+
+// ---------- sessões: um bloco de trabalho com início e fim (ex.: manhã, tarde) ----------
+async function sessaoAberta() { return (await lerSessoes()).filter(s => !s.fim).pop() || null; }
+async function encerrarSessao(s) {
+  const regs = (await lerTodos()).filter(r => r.sessaoId === s.id);
+  s.fim = regs.length ? Math.max(...regs.map(r => r.ts)) : Date.now();
+  await salvarSessao(s);
+}
+async function novaSessao(nome) {
+  for (const aberta of (await lerSessoes()).filter(x => !x.fim)) await encerrarSessao(aberta); // só uma sessão aberta por vez
+  const hoje = diaISO(Date.now());
+  const n = (await lerSessoes()).filter(s => diaISO(s.inicio) === hoje).length + 1;
+  const s = { id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()), nome: nome || `Sessão ${n}`, inicio: Date.now(), fim: null };
+  await salvarSessao(s); return s;
+}
+async function garantirSessao() { // a primeira foto abre uma sessão sozinha; sessão de outro dia é encerrada
+  let s = await sessaoAberta();
+  if (s && diaISO(s.inicio) !== diaISO(Date.now())) { await encerrarSessao(s); s = null; }
+  return s || novaSessao('');
+}
 
 // ---------- EXIF (foto original fica intacta; só lemos) ----------
 async function lerExif(blob) {
@@ -138,6 +169,7 @@ $('entrada-foto').addEventListener('change', async ev => {
   else if (exif.dataHora) { r.ts = exif.dataHora; r.fonteHora = 'hora da foto'; }
   else if (ultimaPos) { r.ts = ultimaPos.ts; r.fonteHora = 'gps do aparelho'; }
   else { r.ts = agora; r.fonteHora = 'relógio do aparelho'; }
+  r.sessaoId = (await garantirSessao()).id;
   rascunho = r;
   pararGPS(); // já lemos a posição; deixar ligado gasta bateria
   // a foto é salva já, antes do comentário: se o celular fechar o app durante a câmera ou o áudio, a foto não se perde
@@ -223,21 +255,30 @@ $('btn-ditar').addEventListener('click', () => {
   if (gravando) pararGravar();
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) { $('status-audio').textContent = 'Este navegador não faz ditado. Use o microfone do teclado do celular.'; return; }
-  let base = $('texto').value.trim(); base = base ? base + ' ' : '';
-  ditado = new SR(); ditado.lang = 'pt-BR'; ditado.continuous = false; ditado.interimResults = true;
-  ditado.onresult = e => {
-    // só o último resultado: em alguns celulares cada resultado repete o anterior e o texto saía duplicado
-    const t = e.results[e.results.length - 1][0].transcript;
-    $('texto').value = (base + t).trim();
+  let base = $('texto').value.trim();
+  const comOuSem = t => ((base ? base + ' ' : '') + t).trim();
+  const abrir = () => {
+    ditado = new SR(); ditado.lang = 'pt-BR'; ditado.continuous = false; ditado.interimResults = true;
+    ditado.onresult = e => {
+      const res = e.results[e.results.length - 1], t = res[0].transcript;
+      $('texto').value = comOuSem(t);
+      if (res.isFinal) base = $('texto').value;
+    };
+    ditado.onerror = e => {
+      if (e.error === 'no-speech' || e.error === 'aborted') return; // silêncio: o fim da sessão reabre sozinho
+      $('status-audio').textContent = e.error === 'not-allowed' || e.error === 'service-not-allowed'
+        ? 'O navegador não liberou o ditado. Use o microfone do teclado do celular.'
+        : 'O ditado falhou (' + e.error + '). Precisa de internet. Use o microfone do teclado, se preferir.';
+      pararDitado();
+    };
+    ditado.onend = () => {
+      base = $('texto').value.trim(); // guarda o que já apareceu, mesmo sem resultado final
+      if (ditando) setTimeout(() => { if (ditando) { try { abrir(); } catch (e) { pararDitado(); } } }, 150); // pausa para pensar não encerra
+    };
+    ditado.start();
   };
-  ditado.onerror = e => {
-    $('status-audio').textContent = e.error === 'not-allowed' || e.error === 'service-not-allowed'
-      ? 'O navegador não liberou o ditado. Use o microfone do teclado do celular.'
-      : 'O ditado falhou (' + e.error + '). Precisa de internet. Use o microfone do teclado, se preferir.';
-  };
-  ditado.onend = () => { if (ditando) pararDitado(); };
   try {
-    ditado.start(); ditando = true;
+    abrir(); ditando = true;
     $('btn-ditar').textContent = 'Parar ditado'; $('btn-ditar').classList.add('gravando');
     $('status-audio').textContent = 'Ouvindo. Fale o comentário.';
   } catch (e) { $('status-audio').textContent = 'Não consegui iniciar o ditado.'; }
@@ -245,6 +286,7 @@ $('btn-ditar').addEventListener('click', () => {
 $('btn-gravar').addEventListener('click', () => (gravando ? pararGravar() : comecarGravar()));
 $('btn-descartar').addEventListener('click', async () => {
   if (gravando) pararGravar();
+  if (ditando) pararDitado();
   if (confirm('Descartar esta foto e o comentário? Não dá para desfazer.')) {
     if (rascunho) await apagarReg(rascunho.id);
     rascunho = null; mostrar('tela-inicio'); atualizarLista();
@@ -252,8 +294,10 @@ $('btn-descartar').addEventListener('click', async () => {
 });
 $('btn-salvar').addEventListener('click', async () => {
   if (gravando) pararGravar();
+  if (ditando) pararDitado();
   await new Promise(r => setTimeout(r, 250)); // deixa o gravador fechar o áudio
   rascunho.transcricao = $('texto').value.trim();
+  rascunho.transcricaoOriginal = rascunho.transcricao; // o texto como foi ditado ou digitado no campo; edições depois não mexem aqui
   try {
     await salvarReg(rascunho);
     toast('Registro salvo no celular.');
@@ -266,6 +310,12 @@ async function atualizarLista() {
   const todos = await lerTodos(); const hoje = diaISO(Date.now());
   const doDia = todos.filter(r => diaISO(r.ts) === hoje);
   $('kpi-hoje').textContent = doDia.length; $('kpi-total').textContent = todos.length;
+  const ses = await sessaoAberta();
+  if (ses) {
+    const n = todos.filter(r => r.sessaoId === ses.id).length;
+    $('sessao-nome').textContent = ses.nome; $('sessao-info').textContent = `desde ${horaBR(ses.inicio).slice(0, 5)} · ${n} foto(s)`;
+  } else { $('sessao-nome').textContent = 'Nenhuma'; $('sessao-info').textContent = 'A primeira foto abre uma sessão.'; }
+  $('btn-fim-sessao').disabled = !ses;
   const ul = $('lista'); ul.textContent = '';
   if (!doDia.length) { ul.innerHTML = '<li class="vazio">Nenhum registro hoje.</li>'; return; }
   for (const r of doDia.slice().reverse()) {
@@ -291,6 +341,16 @@ async function abrirDetalhe(id) {
   mostrar('tela-detalhe');
 }
 $('det-voltar').addEventListener('click', () => mostrar('tela-inicio'));
+$('btn-nova-sessao').addEventListener('click', async () => {
+  const nome = prompt('Nome da nova sessão (pode deixar em branco). A sessão anterior será encerrada.', '');
+  if (nome === null) return;
+  const s = await sessaoAberta(); if (s) await encerrarSessao(s);
+  await novaSessao(nome.trim()); toast('Nova sessão iniciada.'); atualizarLista();
+});
+$('btn-fim-sessao').addEventListener('click', async () => {
+  const s = await sessaoAberta(); if (!s) return;
+  if (confirm(`Encerrar a sessão "${s.nome}"? A próxima foto abre uma sessão nova.`)) { await encerrarSessao(s); toast('Sessão encerrada.'); atualizarLista(); }
+});
 
 // ---------- exportação ----------
 const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
@@ -351,19 +411,35 @@ const extFoto = r => (/png/.test(r.fotoTipo) ? 'png' : /heic|heif/.test(r.fotoTi
 const extAudio = r => (/mp4|aac|m4a/.test(r.audioTipo) ? 'm4a' : /ogg/.test(r.audioTipo) ? 'ogg' : 'webm');
 const seq = i => String(i + 1).padStart(3, '0');
 
-function csv(regs) {
-  const cab = ['Nº', 'Data', 'Hora', 'Latitude', 'Longitude', 'Precisão (m)', 'Origem do local', 'Origem da hora', 'Comentário', 'Foto', 'Áudio', 'SHA-256 da foto'];
+function csv(regs, nomeSessao = () => '') {
+  const cab = ['Nº', 'Data', 'Hora', 'Latitude', 'Longitude', 'Precisão (m)', 'Origem do local', 'Origem da hora', 'Sessão', 'Comentário', 'Foto', 'Áudio', 'SHA-256 da foto'];
   const cel = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const linhas = regs.map((r, i) => [i + 1, dataBR(r.ts), horaBR(r.ts), r.lat == null ? '' : num(r.lat, 6), r.lon == null ? '' : num(r.lon, 6),
-    r.precisao ? Math.round(r.precisao) : '', r.fonteLocal || '', r.fonteHora || '', r.transcricao, `fotos/${seq(i)}.${extFoto(r)}`, r.audio ? `audios/${seq(i)}.${extAudio(r)}` : '', r.sha256 || ''].map(cel).join(';'));
+    r.precisao ? Math.round(r.precisao) : '', r.fonteLocal || '', r.fonteHora || '', nomeSessao(r), r.transcricao, `fotos/${seq(i)}.${extFoto(r)}`, r.audio ? `audios/${seq(i)}.${extAudio(r)}` : '', r.sha256 || ''].map(cel).join(';'));
   return '﻿' + [cab.map(cel).join(';'), ...linhas].join('\r\n');
 }
 
-async function relatorioHTML(regs, meta, logoURI) {
+function resumoSessoes(regs, sessoes) { // por sessão: nome, primeira e última foto, quantidade
+  const mapa = new Map();
+  for (const r of regs) {
+    const k = r.sessaoId || '';
+    const g = mapa.get(k) || { nome: (sessoes.find(s => s.id === k) || {}).nome || 'Sem sessão', n: 0, ini: r.ts, fim: r.ts };
+    g.n++; g.ini = Math.min(g.ini, r.ts); g.fim = Math.max(g.fim, r.ts); mapa.set(k, g);
+  }
+  return mapa;
+}
+async function relatorioHTML(regs, meta, logoURI, sessoes) {
   const dia = dataBR(regs[0].ts);
   const itens = [];
+  const grupos = resumoSessoes(regs, sessoes);
+  let sessaoAtual = null;
   for (let i = 0; i < regs.length; i++) {
     const r = regs[i]; const img = await reduzir(r.foto, r); const h = r.sha256 || await sha256(r.foto);
+    if ((r.sessaoId || '') !== sessaoAtual) {
+      sessaoAtual = r.sessaoId || '';
+      const g = grupos.get(sessaoAtual);
+      itens.push(`<h2 class="sessao">${esc(g.nome)} · ${horaBR(g.ini).slice(0, 5)} às ${horaBR(g.fim).slice(0, 5)} · ${g.n} foto(s)</h2>`);
+    }
     itens.push(`<section class="reg"><div class="num">Foto ${i + 1} de ${regs.length}</div><img src="${img}" alt="Foto ${i + 1}">
 <p class="com"><b>Comentário:</b> ${r.transcricao ? esc(r.transcricao) : 'Sem comentário'}</p>
 <p class="hash">Arquivo original: fotos/${seq(i)}.${extFoto(r)} · SHA-256: ${h || 'não calculado'}</p></section>`);
@@ -381,6 +457,7 @@ body{font-family:Arial,Helvetica,sans-serif;color:#1E1B2B;margin:0;font-size:11p
 .reg{break-inside:avoid;page-break-inside:avoid;border:1px solid #E6E3EE;border-radius:8px;padding:10px;margin:0 0 12px}
 .num{font-weight:bold;color:#2A1C47;font-size:12pt;margin-bottom:6px}
 .reg img{width:100%;max-height:105mm;object-fit:contain;display:block;background:#F1EFF6;border-radius:4px}
+.sessao{font-size:13pt;color:#2A1C47;border-bottom:2px solid #5B4B8A;padding-bottom:3px;margin:18px 0 10px;break-after:avoid}
 .com{margin:8px 0 4px;font-size:10.5pt}.hash{margin:0;font-size:7pt;color:#66667A;word-break:break-all}
 .nota{margin-top:12px;padding:8px 12px;background:#F1EFF6;border:1px solid #E6E3EE;border-radius:6px;font-size:8.5pt;color:#1E1B2B}
 .rodape{border-top:1px solid #BFBFBF;margin-top:14px;padding-top:6px;font-size:8pt;color:#66667A;display:flex;justify-content:space-between}
@@ -388,7 +465,7 @@ body{font-family:Arial,Helvetica,sans-serif;color:#1E1B2B;margin:0;font-size:11p
 @media screen and (max-width:600px){.faixa h1{font-size:15pt}.faixa .logo img{height:12mm}.dados div{min-width:100%}}
 </style></head><body>
 <div class="faixa"><div><h1>Relatório fotográfico de campo</h1><p>${esc(meta.obra || 'Local não informado')} · ${dia}</p></div><span class="logo"><img src="${logoURI}" alt="Jota Barros"></span></div>
-<div class="dados"><div><span>Data</span><b>${dia}</b></div><div><span>Registros</span><b>${regs.length}</b></div><div><span>Responsável</span><b>${esc(meta.resp || '—')}</b></div></div>
+<div class="dados"><div><span>Data</span><b>${dia}</b></div><div><span>Registros</span><b>${regs.length}</b></div><div><span>Responsável</span><b>${esc(meta.resp || '—')}</b></div><div><span>Sessões</span><b>${grupos.size}</b></div></div>
 ${itens.join('\n')}
 <div class="nota"><b>Sobre a inalterabilidade.</b> A data, a hora e as coordenadas impressas em cada foto são cópia dos metadados gravados no arquivo original, entregue junto deste relatório na pasta fotos/. Para conferir uma foto, compare os metadados do arquivo original (data, hora e geolocalização) e o código SHA-256 acima. Se o arquivo for alterado, o código muda. O carimbo na imagem do relatório sozinho não prova que a foto não foi alterada.</div>
 <div class="rodape"><span><b>JOTA BARROS PROJETOS E ASSESSORIA</b> · Relatório fotográfico de campo · ${dia}</span><span>Gerado em ${hoje}</span></div>
@@ -421,18 +498,20 @@ $('btn-gerar').addEventListener('click', async () => {
   $('btn-gerar').disabled = true; $('btn-gerar').textContent = 'Gerando...';
   try {
     const logoURI = await blobParaURI(await (await fetch('logo.png')).blob());
-    const html = await relatorioHTML(regs, meta, logoURI);
+    const sessoes = await lerSessoes();
+    const nomeSessao = r => (sessoes.find(s => s.id === r.sessaoId) || {}).nome || '';
+    const html = await relatorioHTML(regs, meta, logoURI, sessoes);
     const arqs = [];
     regs.forEach((r, i) => { arqs.push({ nome: `fotos/${seq(i)}.${extFoto(r)}`, dados: r.foto }); if (r.audio) arqs.push({ nome: `audios/${seq(i)}.${extAudio(r)}`, dados: r.audio }); });
     const enc = new TextEncoder();
-    arqs.push({ nome: 'registros.csv', dados: enc.encode(csv(regs)) });
-    arqs.push({ nome: 'registros.json', dados: enc.encode(JSON.stringify(regs.map((r, i) => ({ n: i + 1, dataHora: new Date(r.ts).toISOString(), latitude: r.lat == null ? null : +r.lat.toFixed(6), longitude: r.lon == null ? null : +r.lon.toFixed(6), precisaoMetros: r.precisao ?? null, origemLocal: r.fonteLocal, origemHora: r.fonteHora, comentario: r.transcricao, foto: `fotos/${seq(i)}.${extFoto(r)}`, sha256: r.sha256 || null, audio: r.audio ? `audios/${seq(i)}.${extAudio(r)}` : null })), null, 2)) });
+    arqs.push({ nome: 'registros.csv', dados: enc.encode(csv(regs, nomeSessao)) });
+    arqs.push({ nome: 'registros.json', dados: enc.encode(JSON.stringify(regs.map((r, i) => ({ n: i + 1, dataHora: new Date(r.ts).toISOString(), latitude: r.lat == null ? null : +r.lat.toFixed(6), longitude: r.lon == null ? null : +r.lon.toFixed(6), precisaoMetros: r.precisao ?? null, origemLocal: r.fonteLocal, origemHora: r.fonteHora, sessao: nomeSessao(r), comentario: r.transcricao, comentarioOriginal: r.transcricaoOriginal ?? r.transcricao, foto: `fotos/${seq(i)}.${extFoto(r)}`, sha256: r.sha256 || null, audio: r.audio ? `audios/${seq(i)}.${extAudio(r)}` : null })), null, 2)) });
     arqs.push({ nome: 'relatorio-fotografico.html', dados: enc.encode(html) });
     const nome = `registro-campo-${$('data-exp').value}.zip`;
     ultimoPacote = new File([await montarZip(arqs)], nome, { type: 'application/zip' });
     ultimosSoltos = [
       ...regs.map((r, i) => new File([r.foto], `foto-${seq(i)}.${extFoto(r)}`, { type: r.fotoTipo || 'image/jpeg' })),
-      new File([csv(regs)], `registros-${$('data-exp').value}.csv`, { type: 'text/csv' })
+      new File([csv(regs, nomeSessao)], `registros-${$('data-exp').value}.csv`, { type: 'text/csv' })
     ];
     if (ultimoRelatorioURL) URL.revokeObjectURL(ultimoRelatorioURL);
     ultimoRelatorioURL = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
@@ -459,7 +538,7 @@ $('btn-baixar').addEventListener('click', () => {
 $('btn-relatorio').addEventListener('click', () => { if (ultimoRelatorioURL) window.open(ultimoRelatorioURL, '_blank'); });
 
 // ---------- início ----------
-const VERSAO_APP = 'v7';
+const VERSAO_APP = 'v8';
 function redeEstado() { $('estado-rede').textContent = (navigator.onLine ? 'Funciona sem internet' : 'Sem internet · tudo continua funcionando') + ' · ' + VERSAO_APP; }
 addEventListener('online', redeEstado); addEventListener('offline', redeEstado);
 redeEstado();

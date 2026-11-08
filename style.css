@@ -28,6 +28,12 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px soli
 .kpi{flex:1;background:var(--nevoa);border:1px solid var(--borda);border-radius:10px;padding:10px 12px}
 .kpi span{display:block;font-size:13px;color:var(--cinza)}
 .kpi strong{font-size:26px;color:var(--indigo)}
+.sessao-card{margin-top:16px;background:#fff;border:1px solid var(--borda);border-left:4px solid var(--medio);border-radius:10px;padding:10px 12px}
+.sessao-card span{display:block;font-size:13px;color:var(--cinza)}
+.sessao-card strong{font-size:18px;color:var(--indigo)}
+.sessao-card small{display:block;font-size:13px;color:var(--cinza)}
+.sessao-card .linha{margin-top:10px}
+button:disabled{opacity:.5;cursor:default}
 .aviso{font-size:14px;color:var(--ambar-texto);margin:8px 0 0}
 .aviso:empty{display:none}
 .meta{font-size:14px;color:var(--cinza);margin:8px 0}
