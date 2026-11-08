@@ -395,16 +395,22 @@ $('btn-gerar').addEventListener('click', async () => {
     ultimoRelatorioURL = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
     $('msg-resultado').textContent = `Pacote pronto: ${nome} (${(ultimoPacote.size / 1048576).toFixed(1).replace('.', ',')} MB), com ${regs.length} registro(s), fotos originais, áudios, tabela em ordem de horário e relatório.`;
     $('resultado').hidden = false;
-    toast('Pacote pronto. Toque em "Compartilhar ou salvar o pacote".', 6000);
+    toast('Pacote pronto. Toque em "Enviar o pacote" ou em "Baixar o pacote".', 6000);
     $('resultado').scrollIntoView({ behavior: 'smooth', block: 'center' });
   } catch (e) { toast('Falha ao gerar o pacote: ' + e.message, 6000); }
   $('btn-gerar').disabled = false; $('btn-gerar').textContent = 'Gerar arquivos';
 });
 $('btn-compartilhar').addEventListener('click', async () => {
   if (!ultimoPacote) return;
-  try {
-    if (navigator.canShare && navigator.canShare({ files: [ultimoPacote] })) { await navigator.share({ files: [ultimoPacote], title: ultimoPacote.name }); return; }
-  } catch (e) { if (e.name === 'AbortError') return; }
+  if (!navigator.share) { toast('Este navegador não abre o menu de compartilhar. Use "Baixar o pacote".', 7000); return; }
+  if (!navigator.canShare || !navigator.canShare({ files: [ultimoPacote] })) {
+    toast('Este navegador não deixa compartilhar arquivo ZIP direto. Use "Baixar o pacote" e envie pelo app Arquivos.', 8000); return;
+  }
+  try { await navigator.share({ files: [ultimoPacote], title: ultimoPacote.name }); }
+  catch (e) { if (e.name !== 'AbortError') toast('O compartilhamento falhou (' + e.name + '). Use "Baixar o pacote".', 8000); }
+});
+$('btn-baixar').addEventListener('click', () => {
+  if (!ultimoPacote) return;
   const a = document.createElement('a'); a.href = URL.createObjectURL(ultimoPacote); a.download = ultimoPacote.name; document.body.append(a); a.click(); a.remove();
 });
 $('btn-relatorio').addEventListener('click', () => { if (ultimoRelatorioURL) window.open(ultimoRelatorioURL, '_blank'); });
