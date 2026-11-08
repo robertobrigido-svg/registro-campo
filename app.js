@@ -395,6 +395,8 @@ $('btn-gerar').addEventListener('click', async () => {
     ultimoRelatorioURL = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
     $('msg-resultado').textContent = `Pacote pronto: ${nome} (${(ultimoPacote.size / 1048576).toFixed(1).replace('.', ',')} MB), com ${regs.length} registro(s), fotos originais, áudios, tabela em ordem de horário e relatório.`;
     $('resultado').hidden = false;
+    toast('Pacote pronto. Toque em "Compartilhar ou salvar o pacote".', 6000);
+    $('resultado').scrollIntoView({ behavior: 'smooth', block: 'center' });
   } catch (e) { toast('Falha ao gerar o pacote: ' + e.message, 6000); }
   $('btn-gerar').disabled = false; $('btn-gerar').textContent = 'Gerar arquivos';
 });
