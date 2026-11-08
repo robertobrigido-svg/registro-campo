@@ -196,8 +196,46 @@ function pararGravar() {
   if (reconhecimento) { try { reconhecimento.stop(); } catch (e) { /* ok */ } }
   if (gravador && gravador.state !== 'inactive') gravador.stop();
   $('btn-gravar').textContent = 'Gravar de novo'; $('btn-gravar').classList.remove('gravando');
-  $('status-audio').textContent = 'Áudio gravado. Confira o texto e salve.';
+  $('status-audio').textContent = 'Áudio gravado. Conferindo se saiu texto...';
+  setTimeout(() => {
+    if (gravando || ditando) return;
+    $('status-audio').textContent = $('texto').value.trim()
+      ? 'Áudio gravado. Confira o texto e salve.'
+      : 'Áudio gravado, mas o celular não devolveu texto. Toque em "Ditar o texto" ou use o microfone do teclado.';
+  }, 1200);
 }
+
+// ditado sem gravar: só o reconhecimento de voz, para não disputar o microfone com a gravação
+let ditando = false, ditado = null;
+function pararDitado() {
+  ditando = false;
+  if (ditado) { try { ditado.stop(); } catch (e) { /* ok */ } }
+  $('btn-ditar').textContent = 'Ditar o texto';
+  $('btn-ditar').classList.remove('gravando');
+}
+$('btn-ditar').addEventListener('click', () => {
+  if (ditando) { pararDitado(); return; }
+  if (gravando) pararGravar();
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { $('status-audio').textContent = 'Este navegador não faz ditado. Use o microfone do teclado do celular.'; return; }
+  let base = $('texto').value.trim(); base = base ? base + ' ' : '';
+  ditado = new SR(); ditado.lang = 'pt-BR'; ditado.continuous = false; ditado.interimResults = true;
+  ditado.onresult = e => {
+    let t = ''; for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript;
+    $('texto').value = (base + t).trim();
+  };
+  ditado.onerror = e => {
+    $('status-audio').textContent = e.error === 'not-allowed' || e.error === 'service-not-allowed'
+      ? 'O navegador não liberou o ditado. Use o microfone do teclado do celular.'
+      : 'O ditado falhou (' + e.error + '). Precisa de internet. Use o microfone do teclado, se preferir.';
+  };
+  ditado.onend = () => { if (ditando) pararDitado(); };
+  try {
+    ditado.start(); ditando = true;
+    $('btn-ditar').textContent = 'Parar ditado'; $('btn-ditar').classList.add('gravando');
+    $('status-audio').textContent = 'Ouvindo. Fale o comentário.';
+  } catch (e) { $('status-audio').textContent = 'Não consegui iniciar o ditado.'; }
+});
 $('btn-gravar').addEventListener('click', () => (gravando ? pararGravar() : comecarGravar()));
 $('btn-descartar').addEventListener('click', () => {
   if (gravando) pararGravar();
