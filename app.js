@@ -332,6 +332,7 @@ async function abrirDetalhe(id) {
   $('det-meta').textContent = `${dataBR(r.ts)} ${horaBR(r.ts)} · ${localTxt(r)}`;
   const a = $('det-audio'); if (r.audio) { a.src = URL.createObjectURL(r.audio); a.hidden = false; } else { a.hidden = true; a.removeAttribute('src'); }
   $('det-texto').value = r.transcricao || '';
+  $('det-voltar').dataset.id = id;
   $('det-salvar').onclick = async () => {
     const atual = await lerReg(id); if (!atual) return;
     atual.transcricao = $('det-texto').value.trim();
@@ -341,6 +342,38 @@ async function abrirDetalhe(id) {
   mostrar('tela-detalhe');
 }
 $('det-voltar').addEventListener('click', () => mostrar('tela-inicio'));
+
+// ---------- enviar um registro só (WhatsApp, e-mail...), sem gerar o pacote ----------
+function textoRegistro(r, comentario) {
+  const l = ['Registro de campo · Jota Barros', `Data: ${dataBR(r.ts)} · Hora: ${horaBR(r.ts)}`];
+  if (r.lat != null) {
+    l.push(`Local: ${num(r.lat, 6)}; ${num(r.lon, 6)}${r.fonteLocal === 'aparelho' ? ' (GPS do aparelho)' : ''}`);
+    l.push(`Mapa: https://www.google.com/maps?q=${r.lat.toFixed(6)},${r.lon.toFixed(6)}`);
+  } else l.push('Local: não disponível');
+  if (comentario) l.push(`Comentário: ${comentario}`);
+  return l.join('\n');
+}
+async function enviarRegistro(id, original) {
+  const r = await lerReg(id); if (!r) return;
+  const texto = textoRegistro(r, $('det-texto').value.trim());
+  const base = `foto-${diaISO(r.ts)}_${horaBR(r.ts).replace(/:/g, '')}`;
+  let arq;
+  if (original) arq = new File([r.foto], `${base}.${extFoto(r)}`, { type: r.fotoTipo || 'image/jpeg' });
+  else { const b = await reduzirBlob(r.foto, r, 1600); arq = b ? new File([b], `${base}.jpg`, { type: 'image/jpeg' }) : new File([r.foto], `${base}.${extFoto(r)}`, { type: r.fotoTipo || 'image/jpeg' }); }
+  if (navigator.canShare && navigator.canShare({ files: [arq] })) {
+    try { await navigator.share({ files: [arq], text: texto, title: 'Registro de campo' }); }
+    catch (e) { if (e.name !== 'AbortError') toast('O compartilhamento falhou (' + e.name + '). Use "Baixar a foto".', 8000); }
+    return;
+  }
+  // este navegador não compartilha arquivo: baixa a foto e copia o texto para colar na conversa
+  baixarArquivo(arq);
+  try { await navigator.clipboard.writeText(texto); toast('Baixei a foto e copiei o texto. Anexe a foto na conversa e cole o texto.', 9000); }
+  catch (e) { toast('Baixei a foto. O texto não pôde ser copiado.', 8000); }
+}
+function baixarArquivo(arq) { const a = document.createElement('a'); a.href = URL.createObjectURL(arq); a.download = arq.name; document.body.append(a); a.click(); a.remove(); }
+$('det-enviar').addEventListener('click', () => enviarRegistro($('det-voltar').dataset.id, false));
+$('det-enviar-original').addEventListener('click', () => enviarRegistro($('det-voltar').dataset.id, true));
+
 $('btn-nova-sessao').addEventListener('click', async () => {
   const nome = prompt('Nome da nova sessão (pode deixar em branco). A sessão anterior será encerrada.', '');
   if (nome === null) return;
@@ -391,7 +424,7 @@ function linhasCarimbo(r) {
   const orig = r.fonteLocal === 'aparelho' ? ' (GPS do aparelho)' : '';
   return [`${dataBR(r.ts)}  ${horaBR(r.ts)}`, r.lat == null ? 'Local não disponível' : `Lat ${num(r.lat, 6)}  Long ${num(r.lon, 6)}${orig}`];
 }
-async function reduzir(blob, r, max = 1400) { // cópia só para o relatório, com data, hora e coordenadas gravadas na imagem; o original segue intacto no pacote
+async function reduzirBlob(blob, r, max = 1400) { // cópia com data, hora e coordenadas gravadas na imagem; o original segue intacto; devolve null se falhar
   try {
     const bmp = await createImageBitmap(blob, { imageOrientation: 'from-image' });
     const esc = Math.min(1, max / Math.max(bmp.width, bmp.height));
@@ -403,9 +436,10 @@ async function reduzir(blob, r, max = 1400) { // cópia só para o relatório, c
     g.fillStyle = 'rgba(30,20,60,0.78)'; g.fillRect(0, c.height - alt, larg, alt);
     g.fillStyle = '#fff'; ln.forEach((t, i) => g.fillText(t, pad, c.height - alt + pad + i * fs * 1.25));
     const jpg = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.8));
-    return await blobParaURI(jpg);
-  } catch (e) { return await blobParaURI(blob); }
+    return jpg;
+  } catch (e) { return null; }
 }
+async function reduzir(blob, r, max = 1400) { const j = await reduzirBlob(blob, r, max); return blobParaURI(j || blob); } // para o relatório
 const blobParaURI = b => new Promise(ok => { const f = new FileReader(); f.onload = () => ok(f.result); f.readAsDataURL(b); });
 const extFoto = r => (/png/.test(r.fotoTipo) ? 'png' : /heic|heif/.test(r.fotoTipo) ? 'heic' : 'jpg');
 const extAudio = r => (/mp4|aac|m4a/.test(r.audioTipo) ? 'm4a' : /ogg/.test(r.audioTipo) ? 'ogg' : 'webm');
@@ -584,7 +618,7 @@ $('btn-baixar').addEventListener('click', () => {
 $('btn-relatorio').addEventListener('click', () => { if (ultimoRelatorioURL) window.open(ultimoRelatorioURL, '_blank'); });
 
 // ---------- início ----------
-const VERSAO_APP = 'v10';
+const VERSAO_APP = 'v11';
 function redeEstado() { $('estado-rede').textContent = (navigator.onLine ? 'Funciona sem internet' : 'Sem internet · tudo continua funcionando') + ' · ' + VERSAO_APP; }
 addEventListener('online', redeEstado); addEventListener('offline', redeEstado);
 redeEstado();
