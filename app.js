@@ -245,6 +245,7 @@ $('btn-salvar').addEventListener('click', async () => {
   if (gravando) pararGravar();
   await new Promise(r => setTimeout(r, 250)); // deixa o gravador fechar o áudio
   rascunho.transcricao = $('texto').value.trim();
+  rascunho.sha256 = await sha256(rascunho.foto);
   try {
     await salvarReg(rascunho);
     toast('Registro salvo no celular.');
@@ -306,12 +307,27 @@ async function montarZip(arquivos) { // arquivos: [{nome, dados: Blob|Uint8Array
   fim.setUint32(12, tamC, true); fim.setUint32(16, desloc, true);
   return new Blob([...partes, ...central, fim.buffer], { type: 'application/zip' });
 }
-async function reduzir(blob, max = 1400) { // cópia leve só para o relatório; o original segue no pacote
+async function sha256(blob) { // impressão digital do arquivo original, para conferir depois se foi alterado
+  try {
+    const h = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
+    return [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, '0')).join('');
+  } catch (e) { return ''; }
+}
+function linhasCarimbo(r) {
+  const orig = r.fonteLocal === 'aparelho' ? ' (GPS do aparelho)' : '';
+  return [`${dataBR(r.ts)}  ${horaBR(r.ts)}`, r.lat == null ? 'Local não disponível' : `Lat ${num(r.lat, 6)}  Long ${num(r.lon, 6)}${orig}`];
+}
+async function reduzir(blob, r, max = 1400) { // cópia só para o relatório, com data, hora e coordenadas gravadas na imagem; o original segue intacto no pacote
   try {
     const bmp = await createImageBitmap(blob, { imageOrientation: 'from-image' });
     const esc = Math.min(1, max / Math.max(bmp.width, bmp.height));
     const c = document.createElement('canvas'); c.width = Math.round(bmp.width * esc); c.height = Math.round(bmp.height * esc);
-    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    const g = c.getContext('2d'); g.drawImage(bmp, 0, 0, c.width, c.height);
+    const fs = Math.max(14, Math.round(c.width * 0.03)), pad = Math.round(fs * 0.5), ln = linhasCarimbo(r);
+    g.font = `bold ${fs}px Arial, Helvetica, sans-serif`; g.textBaseline = 'top';
+    const larg = Math.max(...ln.map(t => g.measureText(t).width)) + pad * 2, alt = fs * ln.length * 1.25 + pad * 2;
+    g.fillStyle = 'rgba(30,20,60,0.78)'; g.fillRect(0, c.height - alt, larg, alt);
+    g.fillStyle = '#fff'; ln.forEach((t, i) => g.fillText(t, pad, c.height - alt + pad + i * fs * 1.25));
     const jpg = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.8));
     return await blobParaURI(jpg);
   } catch (e) { return await blobParaURI(blob); }
@@ -322,10 +338,10 @@ const extAudio = r => (/mp4|aac|m4a/.test(r.audioTipo) ? 'm4a' : /ogg/.test(r.au
 const seq = i => String(i + 1).padStart(3, '0');
 
 function csv(regs) {
-  const cab = ['Nº', 'Data', 'Hora', 'Latitude', 'Longitude', 'Precisão (m)', 'Origem do local', 'Origem da hora', 'Comentário', 'Foto', 'Áudio'];
+  const cab = ['Nº', 'Data', 'Hora', 'Latitude', 'Longitude', 'Precisão (m)', 'Origem do local', 'Origem da hora', 'Comentário', 'Foto', 'Áudio', 'SHA-256 da foto'];
   const cel = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const linhas = regs.map((r, i) => [i + 1, dataBR(r.ts), horaBR(r.ts), r.lat == null ? '' : num(r.lat, 6), r.lon == null ? '' : num(r.lon, 6),
-    r.precisao ? Math.round(r.precisao) : '', r.fonteLocal || '', r.fonteHora || '', r.transcricao, `fotos/${seq(i)}.${extFoto(r)}`, r.audio ? `audios/${seq(i)}.${extAudio(r)}` : ''].map(cel).join(';'));
+    r.precisao ? Math.round(r.precisao) : '', r.fonteLocal || '', r.fonteHora || '', r.transcricao, `fotos/${seq(i)}.${extFoto(r)}`, r.audio ? `audios/${seq(i)}.${extAudio(r)}` : '', r.sha256 || ''].map(cel).join(';'));
   return '﻿' + [cab.map(cel).join(';'), ...linhas].join('\r\n');
 }
 
@@ -333,11 +349,10 @@ async function relatorioHTML(regs, meta, logoURI) {
   const dia = dataBR(regs[0].ts);
   const itens = [];
   for (let i = 0; i < regs.length; i++) {
-    const r = regs[i]; const img = await reduzir(r.foto);
+    const r = regs[i]; const img = await reduzir(r.foto, r); const h = r.sha256 || await sha256(r.foto);
     itens.push(`<section class="reg"><div class="num">Foto ${i + 1} de ${regs.length}</div><img src="${img}" alt="Foto ${i + 1}">
-<table><tr><th>Local</th><td>${r.lat == null ? 'Não disponível' : `Lat. ${num(r.lat, 6)} · Long. ${num(r.lon, 6)}`}</td></tr>
-<tr><th>Data</th><td>${dataBR(r.ts)}</td></tr><tr><th>Hora</th><td>${horaBR(r.ts)}</td></tr>
-<tr><th>Comentário</th><td>${r.transcricao ? esc(r.transcricao) : 'Sem comentário'}</td></tr></table></section>`);
+<p class="com"><b>Comentário:</b> ${r.transcricao ? esc(r.transcricao) : 'Sem comentário'}</p>
+<p class="hash">Arquivo original: fotos/${seq(i)}.${extFoto(r)} · SHA-256: ${h || 'não calculado'}</p></section>`);
   }
   const hoje = dataBR(Date.now());
   return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -352,8 +367,8 @@ body{font-family:Arial,Helvetica,sans-serif;color:#1E1B2B;margin:0;font-size:11p
 .reg{break-inside:avoid;page-break-inside:avoid;border:1px solid #E6E3EE;border-radius:8px;padding:10px;margin:0 0 12px}
 .num{font-weight:bold;color:#2A1C47;font-size:12pt;margin-bottom:6px}
 .reg img{width:100%;max-height:105mm;object-fit:contain;display:block;background:#F1EFF6;border-radius:4px}
-table{width:100%;border-collapse:collapse;margin-top:8px}th,td{border:1px solid #BFBFBF;padding:5px 8px;text-align:left;vertical-align:top;font-size:10pt}
-th{background:#2A1C47;color:#fff;width:24%}tr:nth-child(even) td{background:#F1EFF6}
+.com{margin:8px 0 4px;font-size:10.5pt}.hash{margin:0;font-size:7pt;color:#66667A;word-break:break-all}
+.nota{margin-top:12px;padding:8px 12px;background:#F1EFF6;border:1px solid #E6E3EE;border-radius:6px;font-size:8.5pt;color:#1E1B2B}
 .rodape{border-top:1px solid #BFBFBF;margin-top:14px;padding-top:6px;font-size:8pt;color:#66667A;display:flex;justify-content:space-between}
 .rodape b{color:#2A1C47}
 @media screen and (max-width:600px){.faixa h1{font-size:15pt}.faixa .logo img{height:12mm}.dados div{min-width:100%}}
@@ -361,6 +376,7 @@ th{background:#2A1C47;color:#fff;width:24%}tr:nth-child(even) td{background:#F1E
 <div class="faixa"><div><h1>Relatório fotográfico de campo</h1><p>${esc(meta.obra || 'Local não informado')} · ${dia}</p></div><span class="logo"><img src="${logoURI}" alt="Jota Barros"></span></div>
 <div class="dados"><div><span>Data</span><b>${dia}</b></div><div><span>Registros</span><b>${regs.length}</b></div><div><span>Responsável</span><b>${esc(meta.resp || '—')}</b></div></div>
 ${itens.join('\n')}
+<div class="nota"><b>Sobre a inalterabilidade.</b> A data, a hora e as coordenadas impressas em cada foto são cópia dos metadados gravados no arquivo original, entregue junto deste relatório na pasta fotos/. Para conferir uma foto, compare os metadados do arquivo original (data, hora e geolocalização) e o código SHA-256 acima. Se o arquivo for alterado, o código muda. O carimbo na imagem do relatório sozinho não prova que a foto não foi alterada.</div>
 <div class="rodape"><span><b>JOTA BARROS PROJETOS E ASSESSORIA</b> · Relatório fotográfico de campo · ${dia}</span><span>Gerado em ${hoje}</span></div>
 </body></html>`;
 }
@@ -395,7 +411,7 @@ $('btn-gerar').addEventListener('click', async () => {
     regs.forEach((r, i) => { arqs.push({ nome: `fotos/${seq(i)}.${extFoto(r)}`, dados: r.foto }); if (r.audio) arqs.push({ nome: `audios/${seq(i)}.${extAudio(r)}`, dados: r.audio }); });
     const enc = new TextEncoder();
     arqs.push({ nome: 'registros.csv', dados: enc.encode(csv(regs)) });
-    arqs.push({ nome: 'registros.json', dados: enc.encode(JSON.stringify(regs.map((r, i) => ({ n: i + 1, dataHora: new Date(r.ts).toISOString(), latitude: r.lat, longitude: r.lon, precisaoMetros: r.precisao ?? null, origemLocal: r.fonteLocal, origemHora: r.fonteHora, comentario: r.transcricao, foto: `fotos/${seq(i)}.${extFoto(r)}`, audio: r.audio ? `audios/${seq(i)}.${extAudio(r)}` : null })), null, 2)) });
+    arqs.push({ nome: 'registros.json', dados: enc.encode(JSON.stringify(regs.map((r, i) => ({ n: i + 1, dataHora: new Date(r.ts).toISOString(), latitude: r.lat == null ? null : +r.lat.toFixed(6), longitude: r.lon == null ? null : +r.lon.toFixed(6), precisaoMetros: r.precisao ?? null, origemLocal: r.fonteLocal, origemHora: r.fonteHora, comentario: r.transcricao, foto: `fotos/${seq(i)}.${extFoto(r)}`, sha256: r.sha256 || null, audio: r.audio ? `audios/${seq(i)}.${extAudio(r)}` : null })), null, 2)) });
     arqs.push({ nome: 'relatorio-fotografico.html', dados: enc.encode(html) });
     const nome = `registro-campo-${$('data-exp').value}.zip`;
     ultimoPacote = new File([await montarZip(arqs)], nome, { type: 'application/zip' });
