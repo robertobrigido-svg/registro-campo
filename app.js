@@ -14,7 +14,7 @@ function toast(msg, ms = 3500) {
   clearTimeout(toast._t); toast._t = setTimeout(() => { t.hidden = true; }, ms);
 }
 function mostrar(tela) {
-  for (const id of ['tela-inicio', 'tela-audio', 'tela-exportar', 'tela-detalhe']) $(id).hidden = id !== tela;
+  for (const id of ['tela-inicio', 'tela-audio', 'tela-exportar', 'tela-detalhe', 'tela-projeto']) $(id).hidden = id !== tela;
   window.scrollTo(0, 0);
 }
 function localTxt(r) {
@@ -64,17 +64,20 @@ async function encerrarSessao(s) {
   s.fim = regs.length ? Math.max(...regs.map(r => r.ts)) : Date.now();
   await salvarSessao(s);
 }
-async function novaSessao(nome) {
+const seguro = t => String(t || '').replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim().slice(0, 80) || 'Sem nome';
+// pasta da sessão no Drive: data, hora de início e nome opcional; o projeto é a pasta de cima
+const pastaDaSessao = s => `${diaISO(s.inicio)} ${horaBR(s.inicio).slice(0, 2)}h${horaBR(s.inicio).slice(3, 5)}${s.nome ? ' - ' + seguro(s.nome) : ''}`;
+async function novaSessao(projeto, nome) {
   for (const aberta of (await lerSessoes()).filter(x => !x.fim)) await encerrarSessao(aberta); // só uma sessão aberta por vez
   const hoje = diaISO(Date.now());
   const n = (await lerSessoes()).filter(s => diaISO(s.inicio) === hoje).length + 1;
-  const s = { id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()), nome: nome || `Sessão ${n}`, inicio: Date.now(), fim: null };
+  const s = { id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()), projeto: projeto || '', nome: nome || '', inicio: Date.now(), fim: null };
   await salvarSessao(s); return s;
 }
 async function garantirSessao() { // a primeira foto abre uma sessão sozinha; sessão de outro dia é encerrada
   let s = await sessaoAberta();
-  if (s && diaISO(s.inicio) !== diaISO(Date.now())) { await encerrarSessao(s); s = null; }
-  return s || novaSessao('');
+  if (s && diaISO(s.inicio) !== diaISO(Date.now())) { const projeto = s.projeto; await encerrarSessao(s); return novaSessao(projeto, ''); } // dia novo: mesmo projeto, pasta nova, sem perguntar
+  return s || novaSessao('Sem projeto', '');
 }
 
 // ---------- EXIF (foto original fica intacta; só lemos) ----------
@@ -150,10 +153,31 @@ function pararGPS() { if (watchId != null) { navigator.geolocation.clearWatch(wa
 
 // ---------- fluxo: foto -> áudio -> salvar ----------
 let rascunho = null;
-$('btn-foto').addEventListener('click', () => {
-  iniciarGPS();
-  $('entrada-foto').value = '';
-  $('entrada-foto').click();
+function abrirCamera() { iniciarGPS(); $('entrada-foto').value = ''; $('entrada-foto').click(); }
+$('btn-foto').addEventListener('click', async () => {
+  const sessao = await sessaoAberta();
+  if (sessao) abrirCamera(); else abrirTelaProjeto(true); // o projeto da última sessão segue valendo; só pergunta quando não há sessão aberta
+});
+let cameraDepois = false;
+async function abrirTelaProjeto(comCamera) {
+  cameraDepois = comCamera;
+  const ultimas = (await lerSessoes()).slice().reverse();
+  const projetos = [...new Set(ultimas.map(x => x.projeto).filter(Boolean))].slice(0, 6);
+  $('proj-nome').value = projetos[0] || ''; $('proj-sessao').value = '';
+  const box = $('proj-recentes'); box.textContent = '';
+  projetos.forEach(p => { const b = document.createElement('button'); b.type = 'button'; b.className = 'chip'; b.textContent = p; b.onclick = () => { $('proj-nome').value = p; }; box.append(b); });
+  $('btn-proj-iniciar').textContent = comCamera ? 'Iniciar e tirar foto' : 'Iniciar sessão';
+  mostrar('tela-projeto');
+}
+$('btn-proj-cancelar').addEventListener('click', () => mostrar('tela-inicio'));
+$('btn-proj-iniciar').addEventListener('click', async () => {
+  const projeto = $('proj-nome').value.trim();
+  if (!projeto) { toast('Informe o projeto ou o local.'); return; }
+  if (cameraDepois) abrirCamera(); // a câmera abre já, no mesmo toque; a sessão fica pronta antes de a foto voltar
+  const aberta = await sessaoAberta(); if (aberta) await encerrarSessao(aberta);
+  const nomeSessao = $('proj-sessao').value.trim();
+  await novaSessao(seguro(projeto), nomeSessao ? seguro(nomeSessao) : '');
+  mostrar('tela-inicio'); atualizarLista();
 });
 $('entrada-foto').addEventListener('change', async ev => {
   const arq = ev.target.files[0]; if (!arq) return;
@@ -317,8 +341,8 @@ async function atualizarLista() {
   const ses = await sessaoAberta();
   if (ses) {
     const n = todos.filter(r => r.sessaoId === ses.id).length;
-    $('sessao-nome').textContent = ses.nome; $('sessao-info').textContent = `desde ${horaBR(ses.inicio).slice(0, 5)} · ${n} foto(s)`;
-  } else { $('sessao-nome').textContent = 'Nenhuma'; $('sessao-info').textContent = 'A primeira foto abre uma sessão.'; }
+    $('sessao-nome').textContent = ses.projeto || ses.nome || 'Sessão'; $('sessao-info').textContent = `${ses.projeto && ses.nome ? ses.nome + ' · ' : ''}desde ${horaBR(ses.inicio).slice(0, 5)} · ${n} foto(s)`;
+  } else { $('sessao-nome').textContent = 'Nenhuma'; $('sessao-info').textContent = 'Ao tirar a primeira foto, o app pergunta o projeto.'; }
   $('btn-fim-sessao').disabled = !ses;
   const ul = $('lista'); ul.textContent = '';
   if (!doDia.length) { ul.innerHTML = '<li class="vazio">Nenhum registro hoje.</li>'; return; }
@@ -333,7 +357,8 @@ async function atualizarLista() {
 async function abrirDetalhe(id) {
   const r = await lerReg(id); if (!r) return;
   $('det-foto').src = URL.createObjectURL(r.foto);
-  $('det-meta').textContent = `${dataBR(r.ts)} ${horaBR(r.ts)} · ${localTxt(r)}`;
+  const sesDet = (await lerSessoes()).find(x => x.id === r.sessaoId);
+  $('det-meta').textContent = `${dataBR(r.ts)} ${horaBR(r.ts)} · ${localTxt(r)}${sesDet ? ' · ' + (sesDet.projeto || sesDet.nome) : ''}`;
   const a = $('det-audio'); if (r.audio) { a.src = URL.createObjectURL(r.audio); a.hidden = false; } else { a.hidden = true; a.removeAttribute('src'); }
   $('det-texto').value = r.transcricao || '';
   $('det-voltar').dataset.id = id;
@@ -378,15 +403,10 @@ function baixarArquivo(arq) { const a = document.createElement('a'); a.href = UR
 $('det-enviar').addEventListener('click', () => enviarRegistro($('det-voltar').dataset.id, false));
 $('det-enviar-original').addEventListener('click', () => enviarRegistro($('det-voltar').dataset.id, true));
 
-$('btn-nova-sessao').addEventListener('click', async () => {
-  const nome = prompt('Nome da nova sessão (pode deixar em branco). A sessão anterior será encerrada.', '');
-  if (nome === null) return;
-  const s = await sessaoAberta(); if (s) await encerrarSessao(s);
-  await novaSessao(nome.trim()); toast('Nova sessão iniciada.'); atualizarLista();
-});
+$('btn-nova-sessao').addEventListener('click', () => abrirTelaProjeto(false));
 $('btn-fim-sessao').addEventListener('click', async () => {
   const s = await sessaoAberta(); if (!s) return;
-  if (confirm(`Encerrar a sessão "${s.nome}"? A próxima foto abre uma sessão nova.`)) { await encerrarSessao(s); toast('Sessão encerrada.'); atualizarLista(); }
+  if (confirm(`Encerrar a sessão "${s.projeto || s.nome}"? A próxima foto abre uma sessão nova.`)) { await encerrarSessao(s); toast('Sessão encerrada.'); atualizarLista(); }
 });
 
 // ---------- exportação ----------
@@ -467,11 +487,11 @@ function nomesDe(r) {
   return { foto: `fotos/${stem}.${extFoto(r)}`, audio: r.audio ? `audios/${stem}.${extAudio(r)}` : null };
 }
 
-function csv(regs, nomeSessao = () => '') {
-  const cab = ['Nº', 'Data', 'Hora', 'Latitude', 'Longitude', 'Precisão (m)', 'Origem do local', 'Origem da hora', 'Sessão', 'Comentário', 'Foto', 'Áudio', 'SHA-256 da foto'];
+function csv(regs, nomeSessao = () => '', projetoDe = () => '') {
+  const cab = ['Nº', 'Data', 'Hora', 'Latitude', 'Longitude', 'Precisão (m)', 'Origem do local', 'Origem da hora', 'Projeto', 'Sessão', 'Comentário', 'Foto', 'Áudio', 'SHA-256 da foto'];
   const cel = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const linhas = regs.map((r, i) => [i + 1, dataBR(r.ts), horaBR(r.ts), r.lat == null ? '' : num(r.lat, 6), r.lon == null ? '' : num(r.lon, 6),
-    r.precisao ? Math.round(r.precisao) : '', r.fonteLocal || '', r.fonteHora || '', nomeSessao(r), r.transcricao, nomesDe(r).foto, nomesDe(r).audio || '', r.sha256 || ''].map(cel).join(';'));
+    r.precisao ? Math.round(r.precisao) : '', r.fonteLocal || '', r.fonteHora || '', projetoDe(r), nomeSessao(r), r.transcricao, nomesDe(r).foto, nomesDe(r).audio || '', r.sha256 || ''].map(cel).join(';'));
   return '﻿' + [cab.map(cel).join(';'), ...linhas].join('\r\n');
 }
 
@@ -564,12 +584,13 @@ const esperar = ms => new Promise(r => setTimeout(r, ms));
 async function montarArquivos(regs, meta, comMidia) {
   const sessoes = await lerSessoes();
   const nomeSessao = r => (sessoes.find(s => s.id === r.sessaoId) || {}).nome || '';
+  const projetoDe = r => (sessoes.find(s => s.id === r.sessaoId) || {}).projeto || '';
   const logoURI = await blobParaURI(await (await fetch('logo.png')).blob());
   const html = await relatorioHTML(regs, meta, logoURI, sessoes);
   const enc = new TextEncoder(), arqs = [];
   if (comMidia) regs.forEach(r => { const n = nomesDe(r); arqs.push({ nome: n.foto, dados: r.foto }); if (r.audio) arqs.push({ nome: n.audio, dados: r.audio }); });
-  arqs.push({ nome: 'registros.csv', dados: enc.encode(csv(regs, nomeSessao)) });
-  arqs.push({ nome: 'registros.json', dados: enc.encode(JSON.stringify(regs.map((r, i) => ({ n: i + 1, dataHora: new Date(r.ts).toISOString(), latitude: r.lat == null ? null : +r.lat.toFixed(6), longitude: r.lon == null ? null : +r.lon.toFixed(6), precisaoMetros: r.precisao ?? null, origemLocal: r.fonteLocal, origemHora: r.fonteHora, sessao: nomeSessao(r), comentario: r.transcricao, comentarioOriginal: r.transcricaoOriginal ?? r.transcricao, foto: nomesDe(r).foto, sha256: r.sha256 || null, audio: nomesDe(r).audio })), null, 2)) });
+  arqs.push({ nome: 'registros.csv', dados: enc.encode(csv(regs, nomeSessao, projetoDe)) });
+  arqs.push({ nome: 'registros.json', dados: enc.encode(JSON.stringify(regs.map((r, i) => ({ n: i + 1, dataHora: new Date(r.ts).toISOString(), latitude: r.lat == null ? null : +r.lat.toFixed(6), longitude: r.lon == null ? null : +r.lon.toFixed(6), precisaoMetros: r.precisao ?? null, origemLocal: r.fonteLocal, origemHora: r.fonteHora, projeto: projetoDe(r), sessao: nomeSessao(r), comentario: r.transcricao, comentarioOriginal: r.transcricaoOriginal ?? r.transcricao, foto: nomesDe(r).foto, sha256: r.sha256 || null, audio: nomesDe(r).audio })), null, 2)) });
   arqs.push({ nome: 'relatorio-fotografico.html', dados: enc.encode(html) });
   return { arqs, html };
 }
@@ -588,8 +609,13 @@ async function enviarPendentes(auto) {
   const meta = { obra: localStorage.getItem('obra') || '', resp: localStorage.getItem('resp') || '' };
   const falhas = []; let motivo = '', mandados = 0;
   try {
-    for (const dia of [...new Set(pend.map(r => diaISO(r.ts)))]) {
-      const regs = todos.filter(r => diaISO(r.ts) === dia);
+    const sessoesTodas = await lerSessoes(), grupos = new Map();
+    for (const r of todos) { const k = r.sessaoId || ('dia:' + diaISO(r.ts)); if (!grupos.has(k)) grupos.set(k, []); grupos.get(k).push(r); }
+    for (const [chave, regs] of grupos) {
+      if (!regs.some(pendente)) continue;
+      const ses = sessoesTodas.find(x => x.id === chave);
+      const pacote = seguro(ses && ses.projeto ? ses.projeto : 'Sem projeto'); // pasta do projeto
+      const pastaSessao = ses ? pastaDaSessao(ses) : `${diaISO(regs[0].ts)} sem sessao`; // subpasta da sessão: duas sessões no mesmo dia são duas pastas
       for (const r of regs) if (!r.sha256) { r.sha256 = await sha256(r.foto); if (r.sha256) await atualizarReg(r.id, a => { a.sha256 = r.sha256; }); } // registro antigo, sem código
       const novos = regs.filter(r => !(r.enviado && r.enviado.arquivos));
       const total = novos.reduce((n, r) => n + (r.audio ? 2 : 1), 0) + 3;
@@ -598,7 +624,7 @@ async function enviarPendentes(auto) {
         const blob = dados instanceof Blob ? dados : new Blob([dados]);
         for (let t = 0; t < 3; t++) {
           try {
-            const j = await chamarDrive({ pacote: dia, caminho: nome, tipo: tipoDe(nome), dados: await blobB64(blob), substituir: !!substituir });
+            const j = await chamarDrive({ pacote, caminho: `${pastaSessao}/${nome}`, tipo: tipoDe(nome), dados: await blobB64(blob), substituir: !!substituir });
             if (j.tamanho === blob.size) { mandados++; feitos++; btn.textContent = `Enviando ${feitos} de ${total}...`; return true; }
             throw new Error('O Drive guardou o arquivo com tamanho diferente.');
           } catch (e) { motivo = e.message; await esperar(1500); }
@@ -612,7 +638,7 @@ async function enviarPendentes(auto) {
         if (ok && r.audio) ok = await mandar(n.audio, r.audio, false);
         if (ok) await atualizarReg(r.id, a => { a.enviado = { arquivos: true, v: a.enviado ? a.enviado.v : '' }; });
       }
-      const { arqs } = await montarArquivos(regs, meta, false);
+      const { arqs } = await montarArquivos(regs, { obra: ses && ses.projeto ? ses.projeto : '', resp: meta.resp }, false);
       let manifestoOk = true;
       for (const a of arqs) if (!(await mandar(a.nome, a.dados, true))) manifestoOk = false;
       if (manifestoOk) for (const r of regs) await atualizarReg(r.id, a => { if (a.enviado && a.enviado.arquivos) a.enviado.v = versaoReg(r); }); // versão que o Drive recebeu; edição feita durante o envio continua pendente
@@ -668,7 +694,7 @@ $('btn-baixar').addEventListener('click', () => { if (ultimoPacote) baixarArquiv
 $('btn-relatorio').addEventListener('click', () => { if (ultimoRelatorioURL) window.open(ultimoRelatorioURL, '_blank'); });
 
 // ---------- início ----------
-const VERSAO_APP = 'v13';
+const VERSAO_APP = 'v14';
 function redeEstado() { $('estado-rede').textContent = (navigator.onLine ? 'Funciona sem internet' : 'Sem internet · tudo continua funcionando') + ' · ' + VERSAO_APP; }
 addEventListener('online', redeEstado); addEventListener('offline', redeEstado);
 redeEstado();

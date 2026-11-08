@@ -32,7 +32,7 @@
     <div class="sessao-card">
       <div><span>Sessão atual</span><strong id="sessao-nome">Nenhuma</strong><small id="sessao-info"></small></div>
       <div class="linha">
-        <button id="btn-nova-sessao" class="secundario" type="button">Nova sessão</button>
+        <button id="btn-nova-sessao" class="secundario" type="button">Trocar projeto</button>
         <button id="btn-fim-sessao" class="secundario" type="button">Encerrar</button>
       </div>
     </div>
@@ -64,6 +64,20 @@
     <div class="linha">
       <button id="btn-descartar" class="perigo" type="button">Descartar</button>
       <button id="btn-salvar" class="principal" type="button">Salvar registro</button>
+    </div>
+  </section>
+
+  <section id="tela-projeto" hidden>
+    <h2>Qual projeto?</h2>
+    <p class="meta">O último projeto já vem marcado. Para uma foto de outro projeto, troque aqui; as próximas fotos seguem no projeto escolhido.</p>
+    <label for="proj-nome">Projeto ou local</label>
+    <input id="proj-nome" type="text" autocomplete="off" placeholder="Ex.: nome da obra">
+    <div id="proj-recentes" class="chips"></div>
+    <label for="proj-sessao">Nome da sessão (opcional)</label>
+    <input id="proj-sessao" type="text" autocomplete="off" placeholder="Ex.: manhã">
+    <div class="linha">
+      <button id="btn-proj-cancelar" class="secundario" type="button">Cancelar</button>
+      <button id="btn-proj-iniciar" class="principal" type="button">Iniciar e tirar foto</button>
     </div>
   </section>
 

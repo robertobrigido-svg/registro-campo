@@ -61,3 +61,6 @@ audio{width:100%;margin-top:12px}
 .tag.pend{background:#FBF0D9;color:#8A5A00;border:1px dashed #C98A12}
 label.marcar{display:flex;gap:8px;align-items:center;color:var(--texto);font-size:15px}
 label.marcar input{width:auto}
+
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.chip{background:var(--nevoa);color:var(--indigo);border:1px solid var(--medio);border-radius:16px;padding:6px 12px;min-height:36px;font-weight:bold}
