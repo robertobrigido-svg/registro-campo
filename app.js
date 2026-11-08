@@ -507,11 +507,12 @@ $('btn-gerar').addEventListener('click', async () => {
     arqs.push({ nome: 'registros.csv', dados: enc.encode(csv(regs, nomeSessao)) });
     arqs.push({ nome: 'registros.json', dados: enc.encode(JSON.stringify(regs.map((r, i) => ({ n: i + 1, dataHora: new Date(r.ts).toISOString(), latitude: r.lat == null ? null : +r.lat.toFixed(6), longitude: r.lon == null ? null : +r.lon.toFixed(6), precisaoMetros: r.precisao ?? null, origemLocal: r.fonteLocal, origemHora: r.fonteHora, sessao: nomeSessao(r), comentario: r.transcricao, comentarioOriginal: r.transcricaoOriginal ?? r.transcricao, foto: `fotos/${seq(i)}.${extFoto(r)}`, sha256: r.sha256 || null, audio: r.audio ? `audios/${seq(i)}.${extAudio(r)}` : null })), null, 2)) });
     arqs.push({ nome: 'relatorio-fotografico.html', dados: enc.encode(html) });
-    const nome = `registro-campo-${$('data-exp').value}.zip`;
+    const agoraNome = new Date(), carimbo = `${$('data-exp').value}_${pad(agoraNome.getHours())}${pad(agoraNome.getMinutes())}${pad(agoraNome.getSeconds())}`; // hora de geração no nome: cada exportação gera um arquivo novo
+    const nome = `registro-campo-${carimbo}.zip`;
     ultimoPacote = new File([await montarZip(arqs)], nome, { type: 'application/zip' });
     ultimosSoltos = [
       ...regs.map((r, i) => new File([r.foto], `foto-${seq(i)}.${extFoto(r)}`, { type: r.fotoTipo || 'image/jpeg' })),
-      new File([csv(regs, nomeSessao)], `registros-${$('data-exp').value}.csv`, { type: 'text/csv' })
+      new File([csv(regs, nomeSessao)], `registros-${carimbo}.csv`, { type: 'text/csv' })
     ];
     if (ultimoRelatorioURL) URL.revokeObjectURL(ultimoRelatorioURL);
     ultimoRelatorioURL = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
@@ -538,7 +539,7 @@ $('btn-baixar').addEventListener('click', () => {
 $('btn-relatorio').addEventListener('click', () => { if (ultimoRelatorioURL) window.open(ultimoRelatorioURL, '_blank'); });
 
 // ---------- início ----------
-const VERSAO_APP = 'v8';
+const VERSAO_APP = 'v9';
 function redeEstado() { $('estado-rede').textContent = (navigator.onLine ? 'Funciona sem internet' : 'Sem internet · tudo continua funcionando') + ' · ' + VERSAO_APP; }
 addEventListener('online', redeEstado); addEventListener('offline', redeEstado);
 redeEstado();
