@@ -424,17 +424,30 @@ function linhasCarimbo(r) {
   const orig = r.fonteLocal === 'aparelho' ? ' (GPS do aparelho)' : '';
   return [`${dataBR(r.ts)}  ${horaBR(r.ts)}`, r.lat == null ? 'Local não disponível' : `Lat ${num(r.lat, 6)}  Long ${num(r.lon, 6)}${orig}`];
 }
+let _simbolo = null;
+async function carregarSimbolo() { if (!_simbolo) _simbolo = await createImageBitmap(await (await fetch('icons/icon-512.png')).blob()); return _simbolo; }
 async function reduzirBlob(blob, r, max = 1400) { // cópia com data, hora e coordenadas gravadas na imagem; o original segue intacto; devolve null se falhar
   try {
     const bmp = await createImageBitmap(blob, { imageOrientation: 'from-image' });
     const esc = Math.min(1, max / Math.max(bmp.width, bmp.height));
     const c = document.createElement('canvas'); c.width = Math.round(bmp.width * esc); c.height = Math.round(bmp.height * esc);
     const g = c.getContext('2d'); g.drawImage(bmp, 0, 0, c.width, c.height);
-    const fs = Math.max(14, Math.round(c.width * 0.03)), pad = Math.round(fs * 0.5), ln = linhasCarimbo(r);
-    g.font = `bold ${fs}px Arial, Helvetica, sans-serif`; g.textBaseline = 'top';
-    const larg = Math.max(...ln.map(t => g.measureText(t).width)) + pad * 2, alt = fs * ln.length * 1.25 + pad * 2;
-    g.fillStyle = 'rgba(30,20,60,0.78)'; g.fillRect(0, c.height - alt, larg, alt);
-    g.fillStyle = '#fff'; ln.forEach((t, i) => g.fillText(t, pad, c.height - alt + pad + i * fs * 1.25));
+    // faixa índigo translúcida no topo, com data e hora, coordenadas e o símbolo da Jota Barros em quadro branco (padrão dos relatórios)
+    const W = c.width, longo = Math.max(c.width, c.height), curto = Math.min(c.width, c.height);
+    const bh = Math.round(Math.min(longo * 0.075, curto * 0.14)), ln = linhasCarimbo(r);
+    g.fillStyle = 'rgba(42,28,71,0.86)'; g.fillRect(0, 0, W, bh);
+    g.fillStyle = '#BFBFBF'; g.fillRect(0, bh, W, Math.max(2, Math.round(bh * 0.025)));
+    const lado = Math.round(bh * 0.8), mg = Math.round(bh * 0.1), tx = Math.round(bh * 0.2), livre = W - lado - mg * 3 - tx;
+    let f1 = bh * 0.34, f2 = bh * 0.22;
+    g.textBaseline = 'alphabetic'; g.fillStyle = '#fff';
+    g.font = `bold ${f1}px Arial, Helvetica, sans-serif`; if (g.measureText(ln[0]).width > livre) f1 *= livre / g.measureText(ln[0]).width;
+    g.font = `${f2}px Arial, Helvetica, sans-serif`; if (g.measureText(ln[1]).width > livre) f2 *= livre / g.measureText(ln[1]).width;
+    g.font = `bold ${f1}px Arial, Helvetica, sans-serif`; g.fillText(ln[0], tx, bh * 0.46);
+    g.font = `${f2}px Arial, Helvetica, sans-serif`; g.fillText(ln[1], tx, bh * 0.82);
+    g.fillStyle = '#fff'; g.beginPath();
+    if (g.roundRect) g.roundRect(W - lado - mg, mg, lado, lado, lado * 0.12); else g.rect(W - lado - mg, mg, lado, lado);
+    g.fill();
+    try { const simb = await carregarSimbolo(), m = lado * 0.08; g.drawImage(simb, W - lado - mg + m, mg + m, lado - 2 * m, lado - 2 * m); } catch (e) { /* sem símbolo: fica o quadro branco */ }
     const jpg = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.8));
     return jpg;
   } catch (e) { return null; }
@@ -618,7 +631,7 @@ $('btn-baixar').addEventListener('click', () => {
 $('btn-relatorio').addEventListener('click', () => { if (ultimoRelatorioURL) window.open(ultimoRelatorioURL, '_blank'); });
 
 // ---------- início ----------
-const VERSAO_APP = 'v11';
+const VERSAO_APP = 'v12';
 function redeEstado() { $('estado-rede').textContent = (navigator.onLine ? 'Funciona sem internet' : 'Sem internet · tudo continua funcionando') + ' · ' + VERSAO_APP; }
 addEventListener('online', redeEstado); addEventListener('offline', redeEstado);
 redeEstado();

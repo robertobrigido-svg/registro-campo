@@ -1,4 +1,4 @@
-const VERSAO = 'registro-campo-v11';
+const VERSAO = 'registro-campo-v12';
 const ARQUIVOS = [
   './', 'index.html', 'app.js', 'style.css', 'manifest.webmanifest', 'logo.png',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'icons/favicon-32.png'
