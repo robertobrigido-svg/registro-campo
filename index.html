@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2A1C47">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Registro de Campo">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+<title>Registro de Campo · Jota Barros</title>
+</head>
+<body>
+<header class="topo">
+  <div>
+    <h1>Registro de Campo</h1>
+    <p id="estado-rede">Funciona sem internet</p>
+  </div>
+  <span class="logo"><img src="logo.png" alt="Jota Barros"></span>
+</header>
+
+<main>
+  <section id="tela-inicio">
+    <button id="btn-foto" class="grande" type="button">Registrar foto</button>
+    <input id="entrada-foto" type="file" accept="image/*" capture="environment" hidden>
+    <p class="aviso" id="aviso-gps"></p>
+
+    <div class="kpis">
+      <div class="kpi"><span>Registros de hoje</span><strong id="kpi-hoje">0</strong></div>
+      <div class="kpi"><span>Total no celular</span><strong id="kpi-total">0</strong></div>
+    </div>
+
+    <h2>Registros do dia</h2>
+    <ul id="lista" class="lista"></ul>
+
+    <div class="rodape-acoes">
+      <button id="btn-exportar" class="secundario" type="button">Exportar o dia</button>
+    </div>
+  </section>
+
+  <section id="tela-audio" hidden>
+    <img id="previa" alt="Foto registrada">
+    <p id="info-local" class="meta"></p>
+    <button id="btn-gravar" class="grande" type="button">Gravar comentário</button>
+    <p id="status-audio" class="meta"></p>
+    <label for="texto">Comentário (transcrição, pode corrigir)</label>
+    <textarea id="texto" rows="4" placeholder="Fale ou digite o comentário"></textarea>
+    <audio id="tocar" controls hidden></audio>
+    <div class="linha">
+      <button id="btn-descartar" class="perigo" type="button">Descartar</button>
+      <button id="btn-salvar" class="principal" type="button">Salvar registro</button>
+    </div>
+  </section>
+
+  <section id="tela-exportar" hidden>
+    <h2>Exportar o dia</h2>
+    <label for="data-exp">Data</label>
+    <input id="data-exp" type="date">
+    <label for="obra">Local ou obra (aparece no relatório)</label>
+    <input id="obra" type="text" placeholder="Ex.: nome da obra">
+    <label for="resp">Responsável (opcional)</label>
+    <input id="resp" type="text">
+    <p id="resumo-exp" class="meta"></p>
+    <div class="linha">
+      <button id="btn-voltar" class="secundario" type="button">Voltar</button>
+      <button id="btn-gerar" class="principal" type="button">Gerar arquivos</button>
+    </div>
+    <div id="resultado" hidden>
+      <p class="meta" id="msg-resultado"></p>
+      <button id="btn-compartilhar" class="principal" type="button">Compartilhar ou salvar o pacote</button>
+      <button id="btn-relatorio" class="secundario" type="button">Ver relatório para imprimir ou salvar em PDF</button>
+    </div>
+  </section>
+
+  <section id="tela-detalhe" hidden>
+    <img id="det-foto" alt="">
+    <p id="det-meta" class="meta"></p>
+    <audio id="det-audio" controls hidden></audio>
+    <p id="det-texto"></p>
+    <div class="linha">
+      <button id="det-voltar" class="secundario" type="button">Voltar</button>
+      <button id="det-excluir" class="perigo" type="button">Excluir</button>
+    </div>
+  </section>
+</main>
+
+<div id="toast" role="status" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
