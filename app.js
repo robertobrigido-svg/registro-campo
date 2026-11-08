@@ -365,7 +365,15 @@ ${itens.join('\n')}
 </body></html>`;
 }
 
-let ultimoPacote = null, ultimoRelatorioURL = null;
+let ultimoPacote = null, ultimoRelatorioURL = null, ultimosSoltos = [];
+$('btn-soltos').addEventListener('click', async () => {
+  if (!ultimosSoltos.length) return;
+  if (!navigator.canShare || !navigator.canShare({ files: ultimosSoltos })) {
+    toast('Este navegador também não aceita enviar as fotos soltas. Use "Baixar o pacote".', 8000); return;
+  }
+  try { await navigator.share({ files: ultimosSoltos }); }
+  catch (e) { if (e.name !== 'AbortError') toast('O compartilhamento falhou (' + e.name + '). Use "Baixar o pacote".', 8000); }
+});
 $('btn-exportar').addEventListener('click', async () => {
   $('data-exp').value = diaISO(Date.now());
   $('obra').value = localStorage.getItem('obra') || ''; $('resp').value = localStorage.getItem('resp') || '';
@@ -391,6 +399,10 @@ $('btn-gerar').addEventListener('click', async () => {
     arqs.push({ nome: 'relatorio-fotografico.html', dados: enc.encode(html) });
     const nome = `registro-campo-${$('data-exp').value}.zip`;
     ultimoPacote = new File([await montarZip(arqs)], nome, { type: 'application/zip' });
+    ultimosSoltos = [
+      ...regs.map((r, i) => new File([r.foto], `foto-${seq(i)}.${extFoto(r)}`, { type: r.fotoTipo || 'image/jpeg' })),
+      new File([csv(regs)], `registros-${$('data-exp').value}.csv`, { type: 'text/csv' })
+    ];
     if (ultimoRelatorioURL) URL.revokeObjectURL(ultimoRelatorioURL);
     ultimoRelatorioURL = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
     $('msg-resultado').textContent = `Pacote pronto: ${nome} (${(ultimoPacote.size / 1048576).toFixed(1).replace('.', ',')} MB), com ${regs.length} registro(s), fotos originais, áudios, tabela em ordem de horário e relatório.`;
