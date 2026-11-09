@@ -43,6 +43,7 @@
     </div>
 
     <button id="btn-enviar" class="principal" type="button" style="width:100%;margin-top:12px">Enviar para o Drive</button>
+    <button id="btn-pdf" class="secundario" type="button" style="width:100%;margin-top:8px">Gerar PDF da sessão (para encaminhar)</button>
 
     <h2>Registros do dia</h2>
     <ul id="lista" class="lista"></ul>
@@ -55,8 +56,8 @@
   <section id="tela-audio" hidden>
     <img id="previa" alt="Foto registrada">
     <p id="info-local" class="meta"></p>
-    <button id="btn-gravar" class="grande" type="button">Gravar comentário</button>
-    <button id="btn-ditar" class="secundario" type="button" style="width:100%;margin-top:8px">Ditar o texto</button>
+    <button id="btn-ditar" class="grande" type="button">Ditar o comentário</button>
+    <button id="btn-gravar" class="secundario" type="button" style="width:100%;margin-top:8px">Gravar áudio (opcional)</button>
     <p id="status-audio" class="meta"></p>
     <label for="texto">Comentário (transcrição, pode corrigir)</label>
     <textarea id="texto" rows="4" placeholder="Fale ou digite o comentário"></textarea>
@@ -93,6 +94,13 @@
       <label class="marcar"><input id="drive-auto" type="checkbox"> Enviar sozinho quando houver internet</label>
       <button id="btn-drive-testar" class="secundario" type="button" style="width:100%;margin-top:12px">Testar conexão</button>
       <p id="drive-status" class="meta"></p>
+    </details>
+
+    <details style="margin-top:16px">
+      <summary style="font-weight:bold;color:var(--indigo);cursor:pointer">PDF de uma sessão</summary>
+      <p class="meta">Gera um relatório simplificado, com as fotos carimbadas e os comentários, e salva no celular para você encaminhar. Não vai para o Drive.</p>
+      <select id="sel-pdf" style="width:100%;font:inherit;padding:10px;border:1px solid var(--prata);border-radius:8px;background:#fff"></select>
+      <button id="btn-pdf-escolhida" class="principal" type="button" style="width:100%;margin-top:12px">Gerar PDF da sessão escolhida</button>
     </details>
 
     <details style="margin-top:16px">

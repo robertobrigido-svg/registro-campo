@@ -203,8 +203,8 @@ $('entrada-foto').addEventListener('change', async ev => {
   $('previa').src = URL.createObjectURL(arq);
   $('info-local').textContent = `${dataBR(r.ts)} ${horaBR(r.ts)} · ${localTxt(r)}`;
   $('texto').value = ''; $('tocar').hidden = true; $('tocar').removeAttribute('src');
-  $('status-audio').textContent = 'Toque em gravar e fale o comentário sobre a foto.';
-  $('btn-gravar').textContent = 'Gravar comentário';
+  $('status-audio').textContent = 'Toque em ditar e fale o comentário. O áudio gravado é opcional.';
+  $('btn-gravar').textContent = 'Gravar áudio (opcional)';
   mostrar('tela-audio');
   if (r.fonteLocal == null) toast('Foto sem localização. Aguarde o GPS ou salve assim mesmo.');
 });
@@ -271,7 +271,7 @@ let ditando = false, ditado = null;
 function pararDitado() {
   ditando = false;
   if (ditado) { try { ditado.stop(); } catch (e) { /* ok */ } }
-  $('btn-ditar').textContent = 'Ditar o texto';
+  $('btn-ditar').textContent = 'Ditar o comentário';
   $('btn-ditar').classList.remove('gravando');
 }
 $('btn-ditar').addEventListener('click', () => {
@@ -581,17 +581,17 @@ const tipoDe = n => /\.jpe?g$/i.test(n) ? 'image/jpeg' : /\.png$/i.test(n) ? 'im
 const esperar = ms => new Promise(r => setTimeout(r, ms));
 
 // monta tabela, JSON e relatório do dia (e, se pedido, as fotos e os áudios), com nomes estáveis
-async function montarArquivos(regs, meta, comMidia) {
+async function montarArquivos(regs, meta, comMidia, comRelatorio = true) {
   const sessoes = await lerSessoes();
   const nomeSessao = r => (sessoes.find(s => s.id === r.sessaoId) || {}).nome || '';
   const projetoDe = r => (sessoes.find(s => s.id === r.sessaoId) || {}).projeto || '';
-  const logoURI = await blobParaURI(await (await fetch('logo.png')).blob());
-  const html = await relatorioHTML(regs, meta, logoURI, sessoes);
+  let html = '';
+  if (comRelatorio) { const logoURI = await blobParaURI(await (await fetch('logo.png')).blob()); html = await relatorioHTML(regs, meta, logoURI, sessoes); } // o relatório do celular só entra no plano B; o do Drive é feito no PC
   const enc = new TextEncoder(), arqs = [];
   if (comMidia) regs.forEach(r => { const n = nomesDe(r); arqs.push({ nome: n.foto, dados: r.foto }); if (r.audio) arqs.push({ nome: n.audio, dados: r.audio }); });
   arqs.push({ nome: 'registros.csv', dados: enc.encode(csv(regs, nomeSessao, projetoDe)) });
   arqs.push({ nome: 'registros.json', dados: enc.encode(JSON.stringify(regs.map((r, i) => ({ n: i + 1, dataHora: new Date(r.ts).toISOString(), latitude: r.lat == null ? null : +r.lat.toFixed(6), longitude: r.lon == null ? null : +r.lon.toFixed(6), precisaoMetros: r.precisao ?? null, origemLocal: r.fonteLocal, origemHora: r.fonteHora, projeto: projetoDe(r), sessao: nomeSessao(r), comentario: r.transcricao, comentarioOriginal: r.transcricaoOriginal ?? r.transcricao, foto: nomesDe(r).foto, sha256: r.sha256 || null, audio: nomesDe(r).audio })), null, 2)) });
-  arqs.push({ nome: 'relatorio-fotografico.html', dados: enc.encode(html) });
+  if (comRelatorio) arqs.push({ nome: 'relatorio-fotografico.html', dados: enc.encode(html) });
   return { arqs, html };
 }
 
@@ -618,7 +618,7 @@ async function enviarPendentes(auto) {
       const pastaSessao = ses ? pastaDaSessao(ses) : `${diaISO(regs[0].ts)} sem sessao`; // subpasta da sessão: duas sessões no mesmo dia são duas pastas
       for (const r of regs) if (!r.sha256) { r.sha256 = await sha256(r.foto); if (r.sha256) await atualizarReg(r.id, a => { a.sha256 = r.sha256; }); } // registro antigo, sem código
       const novos = regs.filter(r => !(r.enviado && r.enviado.arquivos));
-      const total = novos.reduce((n, r) => n + (r.audio ? 2 : 1), 0) + 3;
+      const total = novos.reduce((n, r) => n + (r.audio ? 2 : 1), 0) + 2;
       let feitos = 0;
       const mandar = async (nome, dados, substituir) => {
         const blob = dados instanceof Blob ? dados : new Blob([dados]);
@@ -638,7 +638,7 @@ async function enviarPendentes(auto) {
         if (ok && r.audio) ok = await mandar(n.audio, r.audio, false);
         if (ok) await atualizarReg(r.id, a => { a.enviado = { arquivos: true, v: a.enviado ? a.enviado.v : '' }; });
       }
-      const { arqs } = await montarArquivos(regs, { obra: ses && ses.projeto ? ses.projeto : '', resp: meta.resp }, false);
+      const { arqs } = await montarArquivos(regs, { obra: ses && ses.projeto ? ses.projeto : '', resp: meta.resp }, false, false);
       let manifestoOk = true;
       for (const a of arqs) if (!(await mandar(a.nome, a.dados, true))) manifestoOk = false;
       if (manifestoOk) for (const r of regs) await atualizarReg(r.id, a => { if (a.enviado && a.enviado.arquivos) a.enviado.v = versaoReg(r); }); // versão que o Drive recebeu; edição feita durante o envio continua pendente
@@ -664,7 +664,7 @@ $('btn-limpar').addEventListener('click', async () => {
 $('btn-exportar').addEventListener('click', async () => {
   $('data-exp').value = diaISO(Date.now());
   $('obra').value = localStorage.getItem('obra') || ''; $('resp').value = localStorage.getItem('resp') || '';
-  carregarDrive(); $('resultado').hidden = true; await resumo(); mostrar('tela-exportar');
+  carregarDrive(); $('resultado').hidden = true; await resumo(); await preencherSessoesPdf(); mostrar('tela-exportar');
 });
 async function regsDoDia() { const d = $('data-exp').value; return (await lerTodos()).filter(r => diaISO(r.ts) === d); }
 async function resumo() { const n = (await regsDoDia()).length; $('resumo-exp').textContent = n ? `${n} registro(s) nesta data.` : 'Nenhum registro nesta data.'; }
@@ -693,8 +693,148 @@ $('btn-gerar').addEventListener('click', async () => {
 $('btn-baixar').addEventListener('click', () => { if (ultimoPacote) baixarArquivo(ultimoPacote); });
 $('btn-relatorio').addEventListener('click', () => { if (ultimoRelatorioURL) window.open(ultimoRelatorioURL, '_blank'); });
 
+// ---------- PDF simplificado da sessão, feito no próprio celular (fotos já carimbadas, em JPEG direto no PDF) ----------
+const PDFW = 595.28, PDFH = 841.89, PDFM = 36;
+const COR = { ind: '0.165 0.110 0.278', prata: '0.749 0.749 0.749', txt: '0.118 0.106 0.169', cinza: '0.400 0.400 0.478', br: '1 1 1', lilas: '0.863 0.843 0.918', nevoa: '0.945 0.937 0.965' };
+const _cv = document.createElement('canvas').getContext('2d');
+function larguraTxt(t, fs, negrito) { _cv.font = `${negrito ? 'bold ' : ''}100px Arial, Helvetica, sans-serif`; return _cv.measureText(t).width * fs / 100; }
+function quebrar(texto, fs, max, negrito) {
+  const linhas = [];
+  for (const par of String(texto).split('\n')) {
+    let atual = '';
+    for (const pal of par.split(/\s+/).filter(Boolean)) {
+      const teste = atual ? atual + ' ' + pal : pal;
+      if (larguraTxt(teste, fs, negrito) <= max) atual = teste; else { if (atual) linhas.push(atual); atual = pal; }
+    }
+    linhas.push(atual);
+  }
+  return linhas;
+}
+const latin1 = s => { const o = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); o[i] = c < 256 ? c : 63; } return o; };
+const pdfEsc = s => String(s).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+async function jpegInfo(blob) { const bmp = await createImageBitmap(blob); const o = { w: bmp.width, h: bmp.height, bytes: new Uint8Array(await blob.arrayBuffer()) }; if (bmp.close) bmp.close(); return o; }
+
+// regs: registros de uma sessão, em ordem de horário; cab: { titulo, sub, rodape }; progresso(i, n) opcional
+async function montarPdf(regs, cab, progresso) {
+  const imagens = [];
+  const addImg = async blob => { imagens.push(await jpegInfo(blob)); return imagens.length - 1; };
+  const lc = document.createElement('canvas'); lc.width = 240; lc.height = 240;
+  const lg = lc.getContext('2d'); lg.fillStyle = '#fff'; lg.fillRect(0, 0, 240, 240);
+  lg.drawImage(await carregarSimbolo(), 12, 12, 216, 216);
+  const idxLogo = await addImg(await new Promise(r => lc.toBlob(r, 'image/jpeg', 0.92)));
+
+  const paginas = []; let pg = null, y = 0;
+  const rect = (x, yTopo, w, h, rgb) => pg.ops.push(`${rgb} rg ${x.toFixed(2)} ${(PDFH - yTopo - h).toFixed(2)} ${w.toFixed(2)} ${h.toFixed(2)} re f`);
+  const texto = (x, yBase, t, fs, negrito, rgb) => pg.ops.push(`BT /${negrito ? 'F2' : 'F1'} ${fs} Tf ${rgb} rg ${x.toFixed(2)} ${(PDFH - yBase).toFixed(2)} Td (${pdfEsc(t)}) Tj ET`);
+  const imagem = (idx, x, yTopo, w, h) => { pg.usa.add(idx); pg.ops.push(`q ${w.toFixed(2)} 0 0 ${h.toFixed(2)} ${x.toFixed(2)} ${(PDFH - yTopo - h).toFixed(2)} cm /Im${idx} Do Q`); };
+  const nova = primeira => {
+    pg = { ops: [], usa: new Set() }; paginas.push(pg);
+    if (primeira) {
+      rect(0, 0, PDFW, 78, COR.ind); rect(0, 78, PDFW, 2.5, COR.prata);
+      texto(PDFM, 34, cab.titulo, 20, true, COR.br); texto(PDFM, 56, cab.sub, 10.5, false, COR.lilas);
+      rect(PDFW - PDFM - 54, 12, 54, 54, COR.br); imagem(idxLogo, PDFW - PDFM - 51, 15, 48, 48);
+      y = 98;
+    } else {
+      rect(0, 0, PDFW, 26, COR.ind); rect(0, 26, PDFW, 1.5, COR.prata);
+      texto(PDFM, 17, cab.titulo + ' · ' + cab.sub, 8.5, false, COR.br); y = 44;
+    }
+  };
+  nova(true);
+  const maxW = PDFW - 2 * PDFM;
+  const resumo = `${regs.length} registro(s) · primeiro às ${horaBR(regs[0].ts).slice(0, 5)} · último às ${horaBR(regs[regs.length - 1].ts).slice(0, 5)}`;
+  texto(PDFM, y, resumo, 10, true, COR.ind); y += 18;
+
+  for (let i = 0; i < regs.length; i++) {
+    const r = regs[i]; if (progresso) progresso(i, regs.length);
+    const carimbada = await reduzirBlob(r.foto, r, 1400); // JPEG com a faixa índigo; se falhar, pula a foto e avisa no texto
+    const info = carimbada ? await jpegInfo(carimbada) : null;
+    const retrato = !!info && info.h > info.w * 1.1; // foto em pé: imagem à esquerda e texto ao lado, para não sobrar página em branco
+    const esc = info ? Math.min((retrato ? 200 : maxW) / info.w, (retrato ? 300 : 280) / info.h) : 0, iw = info ? info.w * esc : 0, ih = info ? info.h * esc : 0;
+    const colW = retrato ? maxW - iw - 16 : maxW;
+    const com = quebrar('Comentário: ' + (r.transcricao || 'Sem comentário'), 10, colW, false);
+    const hl = quebrar(`Arquivo original: ${nomesDe(r).foto} · SHA-256: ${r.sha256 || 'não calculado'}`, 6.5, colW, false);
+    const textoAlt = com.length * 12.5 + 6 + hl.length * 8.5;
+    const alt = 16 + (info ? (retrato ? Math.max(ih, textoAlt) : ih + 8 + textoAlt) : 14 + textoAlt) + 16;
+    if (y + alt > PDFH - 52) nova(false);
+    texto(PDFM, y + 10, `Foto ${i + 1} de ${regs.length} · ${horaBR(r.ts)}`, 11, true, COR.ind); const yy = y + 16;
+    let tx = PDFM, ty = yy;
+    if (info) { const idx = imagens.push(info) - 1; imagem(idx, PDFM, yy, iw, ih); if (retrato) tx = PDFM + iw + 16; else ty = yy + ih + 8; }
+    else { texto(PDFM, yy + 9, '(não foi possível gerar a imagem desta foto)', 9, false, COR.cinza); ty = yy + 14; }
+    com.forEach((l, k) => texto(tx, ty + 10 + k * 12.5, l, 10, false, COR.txt)); ty += com.length * 12.5 + 6;
+    hl.forEach((l, k) => texto(tx, ty + 6 + k * 8.5, l, 6.5, false, COR.cinza));
+    y += alt;
+  }
+  const nota = quebrar('Sobre a inalterabilidade: a data, a hora e as coordenadas na faixa de cada foto são cópia dos metadados do arquivo original, guardado no Drive. Para conferir, compare os metadados do original (data, hora e geolocalização) e o código SHA-256 acima. O carimbo sozinho não prova que a foto não foi alterada.', 8, maxW - 16, false);
+  if (y + nota.length * 10.5 + 16 > PDFH - 52) nova(false);
+  rect(PDFM, y, maxW, nota.length * 10.5 + 12, COR.nevoa); nota.forEach((l, k) => texto(PDFM + 8, y + 15 + k * 10.5, l, 8, false, COR.txt));
+
+  paginas.forEach((p, k) => { // rodapé em todas as páginas
+    pg = p; rect(PDFM, PDFH - 40, maxW, 0.6, COR.prata);
+    texto(PDFM, PDFH - 28, 'JOTA BARROS PROJETOS E ASSESSORIA', 7.5, true, COR.ind);
+    texto(PDFM + larguraTxt('JOTA BARROS PROJETOS E ASSESSORIA', 7.5, true) + 8, PDFH - 28, cab.rodape, 7.5, false, COR.cinza);
+    const pt = `Página ${k + 1} de ${paginas.length}`; texto(PDFW - PDFM - larguraTxt(pt, 7.5, false), PDFH - 28, pt, 7.5, false, COR.cinza);
+  });
+
+  // montagem do arquivo PDF
+  const partes = [], offs = []; let desloc = 0;
+  const grava = (...cs) => cs.forEach(c => { const b = typeof c === 'string' ? latin1(c) : c; partes.push(b); desloc += b.length; });
+  const obj = (n, ...cs) => { offs[n] = desloc; grava(`${n} 0 obj\n`, ...cs, '\nendobj\n'); };
+  const nImg = imagens.length, base = 5 + nImg;
+  grava('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
+  obj(1, '<< /Type /Catalog /Pages 2 0 R >>');
+  obj(2, `<< /Type /Pages /Count ${paginas.length} /Kids [${paginas.map((_, k) => `${base + k * 2 + 1} 0 R`).join(' ')}] >>`);
+  obj(3, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
+  obj(4, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>');
+  imagens.forEach((im, k) => obj(5 + k, `<< /Type /XObject /Subtype /Image /Width ${im.w} /Height ${im.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${im.bytes.length} >>\nstream\n`, im.bytes, '\nendstream'));
+  paginas.forEach((p, k) => {
+    const cont = latin1(p.ops.join('\n'));
+    obj(base + k * 2, `<< /Length ${cont.length} >>\nstream\n`, cont, '\nendstream');
+    const xo = [...p.usa].map(i => `/Im${i} ${5 + i} 0 R`).join(' ');
+    obj(base + k * 2 + 1, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PDFW} ${PDFH}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> /XObject << ${xo} >> >> /Contents ${base + k * 2} 0 R >>`);
+  });
+  const total = base + paginas.length * 2, xref = desloc;
+  grava(`xref\n0 ${total}\n0000000000 65535 f \n`);
+  for (let n = 1; n < total; n++) grava(`${String(offs[n]).padStart(10, '0')} 00000 n \n`);
+  grava(`trailer\n<< /Size ${total} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`);
+  return new Blob(partes, { type: 'application/pdf' });
+}
+
+async function pdfDaSessao(sessaoId) {
+  const ses = (await lerSessoes()).find(s => s.id === sessaoId);
+  const regs = (await lerTodos()).filter(r => (r.sessaoId || '') === (sessaoId || ''));
+  if (!regs.length) { toast('Esta sessão não tem fotos.'); return; }
+  for (const r of regs) if (!r.sha256) { r.sha256 = await sha256(r.foto); if (r.sha256) await atualizarReg(r.id, a => { a.sha256 = r.sha256; }); }
+  const projeto = ses && ses.projeto ? ses.projeto : (ses && ses.nome) || 'Sem projeto';
+  const cab = { titulo: 'Relatório fotográfico de campo', sub: `${projeto}${ses && ses.nome && ses.projeto ? ' · ' + ses.nome : ''} · ${dataBR(regs[0].ts)}`, rodape: `Relatório simplificado · gerado em ${dataBR(Date.now())}` };
+  const botoes = ['btn-pdf', 'btn-pdf-escolhida'].map($);
+  botoes.forEach(b => { b.dataset.rotulo = b.dataset.rotulo || b.textContent; b.disabled = true; });
+  try {
+    const blob = await montarPdf(regs, cab, (i, n) => botoes.forEach(b => { b.textContent = `Gerando PDF ${i + 1} de ${n}...`; }));
+    const nome = `Relatorio_${seguro(projeto).replace(/ /g, '_')}_${diaISO(regs[0].ts)}_${horaBR(ses ? ses.inicio : regs[0].ts).slice(0, 2)}h${horaBR(ses ? ses.inicio : regs[0].ts).slice(3, 5)}.pdf`;
+    const arq = new File([blob], nome, { type: 'application/pdf' });
+    if (navigator.canShare && navigator.canShare({ files: [arq] })) {
+      try { await navigator.share({ files: [arq], title: nome }); return; } catch (e) { if (e.name === 'AbortError') return; }
+    }
+    baixarArquivo(arq); toast(`PDF salvo no celular (${(arq.size / 1048576).toFixed(1).replace('.', ',')} MB). Procure em Downloads.`, 8000);
+  } catch (e) { toast('Falha ao gerar o PDF: ' + e.message, 8000); }
+  finally { botoes.forEach(b => { b.disabled = false; b.textContent = b.dataset.rotulo; }); }
+}
+$('btn-pdf').addEventListener('click', async () => {
+  const aberta = await sessaoAberta(); const todas = await lerSessoes();
+  const alvo = aberta || todas[todas.length - 1];
+  if (alvo) pdfDaSessao(alvo.id);
+  else { const regs = await lerTodos(); if (regs.length) pdfDaSessao(''); else toast('Ainda não há fotos.'); }
+});
+$('btn-pdf-escolhida').addEventListener('click', () => { const v = $('sel-pdf').value; if (v !== '') pdfDaSessao(v === '__sem' ? '' : v); });
+async function preencherSessoesPdf() {
+  const sel = $('sel-pdf'); sel.textContent = '';
+  const todas = (await lerSessoes()).slice().reverse().slice(0, 30), regs = await lerTodos();
+  for (const s of todas) { const n = regs.filter(r => r.sessaoId === s.id).length; if (!n) continue; const o = document.createElement('option'); o.value = s.id; o.textContent = `${s.projeto || 'Sem projeto'} · ${dataBR(s.inicio)} ${horaBR(s.inicio).slice(0, 5)}${s.nome ? ' · ' + s.nome : ''} (${n} foto(s))`; sel.append(o); }
+  if (regs.some(r => !r.sessaoId)) { const o = document.createElement('option'); o.value = '__sem'; o.textContent = 'Registros sem sessão'; sel.append(o); }
+}
+
 // ---------- início ----------
-const VERSAO_APP = 'v14';
+const VERSAO_APP = 'v15';
 function redeEstado() { $('estado-rede').textContent = (navigator.onLine ? 'Funciona sem internet' : 'Sem internet · tudo continua funcionando') + ' · ' + VERSAO_APP; }
 addEventListener('online', redeEstado); addEventListener('offline', redeEstado);
 redeEstado();

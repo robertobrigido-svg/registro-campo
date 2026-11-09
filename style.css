@@ -64,3 +64,5 @@ label.marcar input{width:auto}
 
 .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
 .chip{background:var(--nevoa);color:var(--indigo);border:1px solid var(--medio);border-radius:16px;padding:6px 12px;min-height:36px;font-weight:bold}
+
+.gravando{background:var(--vermelho) !important;color:#fff !important;border-color:var(--vermelho) !important}
