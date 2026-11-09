@@ -28,6 +28,7 @@
     <button id="btn-foto" class="grande" type="button">Registrar foto</button>
     <input id="entrada-foto" type="file" accept="image/*" capture="environment" hidden>
     <p class="aviso" id="aviso-gps"></p>
+    <p class="dica">Dica: para rua, calçada e esquina, segure o celular <b>deitado</b>: a foto mostra mais do local e sai maior no relatório. Em pé, só para detalhes.</p>
 
     <div class="sessao-card">
       <div><span>Sessão atual</span><strong id="sessao-nome">Nenhuma</strong><small id="sessao-info"></small></div>
@@ -39,7 +40,7 @@
     </div>
 
     <div class="kpis">
-      <div class="kpi"><span>Registros de hoje</span><strong id="kpi-hoje">0</strong></div>
+      <div class="kpi"><span>Fotos do projeto hoje</span><strong id="kpi-hoje">0</strong></div>
       <div class="kpi"><span>Pendentes de envio</span><strong id="kpi-total">0</strong></div>
     </div>
 
@@ -47,8 +48,9 @@
     <p id="envio-status" class="meta" style="margin:6px 0 0"></p>
     <button id="btn-pdf" class="secundario" type="button" style="width:100%;margin-top:8px">Gerar PDF da sessão (para encaminhar)</button>
 
-    <h2>Registros do dia</h2>
+    <h2 id="lista-titulo">Fotos do projeto</h2>
     <ul id="lista" class="lista"></ul>
+    <button id="btn-ver-enviadas" class="secundario" type="button" style="width:100%;margin-top:8px" hidden></button>
 
     <div class="rodape-acoes">
       <button id="btn-exportar" class="secundario" type="button">Mais opções</button>

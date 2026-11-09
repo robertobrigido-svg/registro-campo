@@ -360,15 +360,20 @@ async function montarContextoRapido(ses) {
 }
 
 // ---------- lista e detalhe ----------
+let verEnviadas = false; // false: só o que ainda falta enviar e o da sessão atual; true: tudo do projeto
 async function atualizarLista() {
   const todos = await lerTodos(); const hoje = diaISO(Date.now());
-  const doDia = todos.filter(r => diaISO(r.ts) === hoje);
-  const pendentes = todos.filter(pendente).length;
-  $('kpi-hoje').textContent = doDia.length; $('kpi-total').textContent = pendentes;
+  const sessoes = await lerSessoes();
+  const ses = await sessaoAberta();
+  const projDeSessao = {}; sessoes.forEach(s => { projDeSessao[s.id] = s.projeto; });
+  const projetoDe = r => r.projeto || projDeSessao[r.sessaoId] || '';
+  const projetoAtual = ses ? ses.projeto : ((sessoes[sessoes.length - 1] || {}).projeto || '');
+  const doProjeto = projetoAtual ? todos.filter(r => projetoDe(r) === projetoAtual) : [];
+  const pendentes = todos.filter(pendente).length; // o envio leva tudo o que falta, de qualquer projeto
+  $('kpi-hoje').textContent = doProjeto.filter(r => diaISO(r.ts) === hoje).length; $('kpi-total').textContent = pendentes;
   $('btn-enviar').textContent = pendentes ? `Enviar para o Drive (${pendentes})` : 'Tudo enviado para o Drive';
   $('btn-enviar').disabled = enviando || !pendentes;
   estadoEnvio();
-  const ses = await sessaoAberta();
   if (ses) {
     const n = todos.filter(r => r.sessaoId === ses.id).length;
     $('sessao-nome').textContent = ses.projeto || ses.nome || 'Sessão';
@@ -377,9 +382,20 @@ async function atualizarLista() {
   } else { $('sessao-nome').textContent = 'Nenhuma'; $('sessao-info').textContent = 'Ao tirar a primeira foto, o app pergunta o projeto.'; }
   $('btn-fim-sessao').disabled = !ses;
   await montarContextoRapido(ses);
+  // a lista mostra só o projeto atual; as fotos já enviadas ficam guardadas e aparecem se você pedir
+  const mostrar_ = verEnviadas ? doProjeto : doProjeto.filter(r => pendente(r) || (ses && r.sessaoId === ses.id));
+  const ocultas = doProjeto.length - mostrar_.length;
+  $('lista-titulo').textContent = projetoAtual ? `Fotos de ${projetoAtual}` : 'Fotos do projeto';
+  const bv = $('btn-ver-enviadas');
+  bv.hidden = !(ocultas > 0 || verEnviadas);
+  bv.textContent = verEnviadas ? 'Ocultar as já enviadas' : `Ver as já enviadas deste projeto (${ocultas})`;
+  bv.onclick = () => { verEnviadas = !verEnviadas; atualizarLista(); };
   const ul = $('lista'); ul.textContent = '';
-  if (!doDia.length) { ul.innerHTML = '<li class="vazio">Nenhum registro hoje.</li>'; return; }
-  for (const r of doDia.slice().reverse()) {
+  if (!mostrar_.length) { ul.innerHTML = `<li class="vazio">${projetoAtual ? 'Nenhuma foto a mostrar neste projeto.' : 'Nenhum projeto em andamento.'}</li>`; return; }
+  let diaAnterior = '';
+  for (const r of mostrar_.slice().reverse()) {
+    const dia = diaISO(r.ts);
+    if (dia !== diaAnterior) { diaAnterior = dia; const t = document.createElement('li'); t.className = 'vazio'; t.style.textAlign = 'left'; t.textContent = dia === hoje ? 'Hoje' : dataBR(r.ts); ul.append(t); }
     const li = document.createElement('li'); li.className = 'item';
     const img = document.createElement('img'); img.src = URL.createObjectURL(r.foto); img.alt = '';
     const d = document.createElement('div');
@@ -896,7 +912,7 @@ async function preencherSessoesPdf() {
 }
 
 // ---------- início ----------
-const VERSAO_APP = 'v16';
+const VERSAO_APP = 'v17';
 function redeEstado() { $('estado-rede').textContent = (navigator.onLine ? 'Funciona sem internet' : 'Sem internet · tudo continua funcionando') + ' · ' + VERSAO_APP; }
 addEventListener('online', redeEstado); addEventListener('offline', redeEstado);
 redeEstado();

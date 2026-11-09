@@ -69,3 +69,4 @@ label.marcar input{width:auto}
 
 .chip.ativo{background:var(--indigo);color:#fff}
 .sessao-card .chips{margin-top:10px}
+.dica{font-size:13.5px;color:var(--cinza);margin:8px 0 0;line-height:1.35}
